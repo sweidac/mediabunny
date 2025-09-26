@@ -10,8 +10,8 @@ import { VideoSampleSink } from '../../src/media-sink.js';
 import { QUALITY_HIGH } from '../../src/encode.js';
 
 const VIDEOS = [
-	{ file: '1080p-portrait-derotated.mp4', name: 'natural rotation' },
-	{ file: '1080p-portrait-rotated.mp4', name: 'metadata-rotation' },
+	{ file: '1080p-portrait-derotated.mp4', name: `resizing natural rotation leads to correct visual size` },
+	{ file: '1080p-portrait-rotated.mp4', name: `resizing metadata-rotationleads to incorrect visual size` },
 ];
 
 let blobUrls: string[] = [];
@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 
 VIDEOS.forEach(({ file, name }) => {
-	test(`resizing ${name} leads to correct visual size`, async () => {
+	test(name, async () => {
 		// === Conversion stage ===
 		const input = new Input({
 				formats: ALL_FORMATS,
