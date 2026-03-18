@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,6 +11,8 @@ import {
 	assert,
 	binarySearchLessOrEqual,
 	closedIntervalsOverlap,
+	isNumber,
+	isWebKit,
 	MaybePromise,
 	mergeRequestInit,
 	promiseWithResolvers,
@@ -100,10 +102,17 @@ export class BufferSource extends Source {
 	/** @internal */
 	_onreadCalled = false;
 
-	/** Creates a new {@link BufferSource} backed the specified `ArrayBuffer` or `ArrayBufferView`. */
-	constructor(buffer: ArrayBuffer | ArrayBufferView) {
-		if (!(buffer instanceof ArrayBuffer) && !ArrayBuffer.isView(buffer)) {
-			throw new TypeError('buffer must be an ArrayBuffer or ArrayBufferView.');
+	/**
+	 * Creates a new {@link BufferSource} backed by the specified `ArrayBuffer`, `SharedArrayBuffer`,
+	 * or `ArrayBufferView`.
+	 */
+	constructor(buffer: AllowSharedBufferSource) {
+		if (
+			!(buffer instanceof ArrayBuffer)
+			&& !(typeof SharedArrayBuffer !== 'undefined' && buffer instanceof SharedArrayBuffer)
+			&& !ArrayBuffer.isView(buffer)
+		) {
+			throw new TypeError('buffer must be an ArrayBuffer, SharedArrayBuffer, or ArrayBufferView.');
 		}
 
 		super();
@@ -172,9 +181,9 @@ export class BlobSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 
 		super();
@@ -208,7 +217,14 @@ export class BlobSource extends Source {
 	private async _runWorker(worker: ReadWorker) {
 		let reader = this._readers.get(worker);
 		if (reader === undefined) {
-			if ('stream' in this._blob) {
+			// https://github.com/Vanilagy/mediabunny/issues/184
+			// WebKit has critical bugs with blob.stream():
+			// - WebKitBlobResource error 1 when streaming large files
+			// - Memory buildup and reload loops on iOS (network process crashes)
+			// - ReadableStream stalls under backpressure (especially video)
+			// Affects Safari and all iOS browsers (Chrome, Firefox, etc.).
+			// Use arrayBuffer() fallback for WebKit browsers.
+			if ('stream' in this._blob && !isWebKit()) {
 				// Get a reader of the blob starting at the required offset, and then keep it around
 				const slice = this._blob.slice(worker.currentPos);
 				reader = slice.stream().getReader();
@@ -225,11 +241,10 @@ export class BlobSource extends Source {
 				const { done, value } = await reader.read();
 				if (done) {
 					this._orchestrator.forgetWorker(worker);
+					throw new Error('Blob reader stopped unexpectedly before all requested data was read.');
+				}
 
-					if (worker.currentPos < worker.targetPos) { // I think this `if` should always hit?
-						throw new Error('Blob reader stopped unexpectedly before all requested data was read.');
-					}
-
+				if (worker.aborted) {
 					break;
 				}
 
@@ -238,12 +253,21 @@ export class BlobSource extends Source {
 			} else {
 				const data = await this._blob.slice(worker.currentPos, worker.targetPos).arrayBuffer();
 
+				if (worker.aborted) {
+					break;
+				}
+
 				this.onread?.(worker.currentPos, worker.currentPos + data.byteLength);
 				this._orchestrator.supplyWorkerData(worker, new Uint8Array(data));
 			}
 		}
 
 		worker.running = false;
+
+		if (worker.aborted) {
+			// MDN: "Calling this method signals a loss of interest in the stream by a consumer."
+			await reader?.cancel();
+		}
 	}
 
 	/** @internal */
@@ -254,7 +278,42 @@ export class BlobSource extends Source {
 
 const URL_SOURCE_MIN_LOAD_AMOUNT = 0.5 * 2 ** 20; // 0.5 MiB
 const DEFAULT_RETRY_DELAY
-	= (previousAttempts => Math.min(2 ** (previousAttempts - 2), 16)) satisfies UrlSourceOptions['getRetryDelay'];
+	= ((previousAttempts, error, src) => {
+		// Check if this could be a CORS error. If so, we cannot recover from it and
+		// should not attempt to retry.
+		// CORS errors are intentionally not opaque, so we need to rely on heuristics.
+		const couldBeCorsError = error instanceof Error && (
+			error.message.includes('Failed to fetch') // Chrome
+			|| error.message.includes('Load failed') // Safari
+			|| error.message.includes('NetworkError when attempting to fetch resource') // Firefox
+		);
+
+		if (couldBeCorsError) {
+			let originOfSrc: string | null = null;
+			// Checking if the origin is different, because only then a CORS error could originate
+			try {
+				if (typeof window !== 'undefined' && typeof window.location !== 'undefined') {
+					originOfSrc = new URL(src instanceof Request ? src.url : src, window.location.href).origin;
+				}
+			} catch {
+				// URL parse failed
+			}
+
+			// If user is offline, it is probably not a CORS error.
+			const isOnline
+			= typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
+
+			if (isOnline && originOfSrc !== null && originOfSrc !== window.location.origin) {
+				console.warn(
+					`Request will not be retried because a CORS error was suspected due to different origins. You can`
+					+ ` modify this behavior by providing your own function for the 'getRetryDelay' option.`,
+				);
+				return null;
+			}
+		}
+
+		return Math.min(2 ** (previousAttempts - 2), 16);
+	}) satisfies UrlSourceOptions['getRetryDelay'];
 
 /**
  * Options for {@link UrlSource}.
@@ -265,6 +324,9 @@ export type UrlSourceOptions = {
 	/**
 	 * The [`RequestInit`](https://developer.mozilla.org/en-US/docs/Web/API/RequestInit) used by the Fetch API. Can be
 	 * used to further control the requests, such as setting custom headers.
+	 *
+	 * All fields will work except for `signal` and `headers.Range`; these will be overridden by Mediabunny. If you want
+	 * to cancel ongoing requests, use {@link Input.dispose}.
 	 */
 	requestInit?: RequestInit;
 
@@ -273,12 +335,16 @@ export type UrlSourceOptions = {
 	 * with the number of previous, unsuccessful attempts, as well as with the error with which the previous request
 	 * failed. If the function returns `null`, no more retries will be made.
 	 *
-	 * By default, it uses an exponential backoff algorithm that never fully gives up.
+	 * By default, it uses an exponential backoff algorithm that never gives up unless
+	 * a CORS error is suspected (`fetch()` did reject, `navigator.onLine` is true and origin is different)
 	 */
-	getRetryDelay?: (previousAttempts: number, error: unknown) => number | null;
+	getRetryDelay?: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 
 	/** The maximum number of bytes the cache is allowed to hold in memory. Defaults to 64 MiB. */
 	maxCacheSize?: number;
+
+	/** The maximum number of parallel requests to use for fetching. Defaults to 2. */
+	parallelism?: number;
 
 	/**
 	 * A WHATWG-compatible fetch function. You can use this field to polyfill the `fetch` function, add missing
@@ -297,7 +363,7 @@ export class UrlSource extends Source {
 	/** @internal */
 	_url: string | URL | Request;
 	/** @internal */
-	_getRetryDelay: (previousAttempts: number, error: unknown) => number | null;
+	_getRetryDelay: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 	/** @internal */
 	_options: UrlSourceOptions;
 	/** @internal */
@@ -308,7 +374,12 @@ export class UrlSource extends Source {
 		abortController: AbortController;
 	}>();
 
-	/** Creates a new {@link UrlSource} backed by the resource at the specified URL. */
+	/**
+	 * Creates a new {@link UrlSource} backed by the resource at the specified URL.
+	 *
+	 * When passing a `Request` instance, note that the `signal` and `headers.Range` options will be overridden by
+	 * Mediabunny. If you want to cancel ongoing requests, use {@link Input.dispose}.
+	 */
 	constructor(
 		url: string | URL | Request,
 		options: UrlSourceOptions = {},
@@ -331,9 +402,12 @@ export class UrlSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
+		}
+		if (options.parallelism !== undefined && (!Number.isInteger(options.parallelism) || options.parallelism < 1)) {
+			throw new TypeError('options.parallelism, when provided, must be a positive number.');
 		}
 		if (options.fetchFn !== undefined && typeof options.fetchFn !== 'function') {
 			throw new TypeError('options.fetchFn, when provided, must be a function.');
@@ -346,11 +420,13 @@ export class UrlSource extends Source {
 		this._options = options;
 		this._getRetryDelay = options.getRetryDelay ?? DEFAULT_RETRY_DELAY;
 
+		// Most files in the real-world have a single sequential access pattern, but having two in parallel can
+		// also happen
+		const DEFAULT_PARALLELISM = 2;
+
 		this._orchestrator = new ReadOrchestrator({
 			maxCacheSize: options.maxCacheSize ?? (64 * 2 ** 20 /* 64 MiB */),
-			// Most files in the real-world have a single sequential access pattern, but having two in parallel can
-			// also happen
-			maxWorkerCount: 2,
+			maxWorkerCount: options.parallelism ?? DEFAULT_PARALLELISM,
 			runWorker: this._runWorker.bind(this),
 			prefetchProfile: PREFETCH_PROFILES.network,
 		});
@@ -376,6 +452,7 @@ export class UrlSource extends Source {
 				signal: abortController.signal,
 			}),
 			this._getRetryDelay,
+			() => this._disposed,
 		);
 
 		if (!response.ok) {
@@ -387,7 +464,7 @@ export class UrlSource extends Source {
 		let fileSize: number;
 
 		if (response.status === 206) {
-			fileSize = this._getPartialLengthFromRangeResponse(response);
+			fileSize = this._getTotalLengthFromRangeResponse(response);
 			worker = this._orchestrator.createWorker(0, Math.min(fileSize, URL_SOURCE_MIN_LOAD_AMOUNT));
 		} else {
 			// Server probably returned a 200.
@@ -424,7 +501,7 @@ export class UrlSource extends Source {
 	/** @internal */
 	private async _runWorker(worker: ReadWorker) {
 		// The outer loop is for resuming a request if it dies mid-response
-		while (!worker.aborted) {
+		while (true) {
 			const existing = this._existingResponses.get(worker);
 			this._existingResponses.delete(worker);
 
@@ -443,6 +520,7 @@ export class UrlSource extends Source {
 						signal: abortController.signal,
 					}),
 					this._getRetryDelay,
+					() => this._disposed,
 				);
 			}
 
@@ -457,14 +535,6 @@ export class UrlSource extends Source {
 				throw new Error(
 					'HTTP server did not respond with 206 Partial Content to a range request. To enable efficient media'
 					+ ' file streaming across a network, please make sure your server supports range requests.',
-				);
-			}
-
-			const length = this._getPartialLengthFromRangeResponse(response);
-			const required = worker.targetPos - worker.currentPos;
-			if (length < required) {
-				throw new Error(
-					`HTTP response unexpectedly too short: Needed at least ${required} bytes, got only ${length}.`,
 				);
 			}
 
@@ -490,7 +560,12 @@ export class UrlSource extends Source {
 				try {
 					readResult = await reader.read();
 				} catch (error) {
-					const retryDelayInSeconds = this._getRetryDelay(1, error);
+					if (this._disposed) {
+						// No need to try to retry
+						throw error;
+					}
+
+					const retryDelayInSeconds = this._getRetryDelay(1, error, this._url);
 					if (retryDelayInSeconds !== null) {
 						console.error('Error while reading response stream. Attempting to resume.', error);
 						await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
@@ -501,19 +576,24 @@ export class UrlSource extends Source {
 					}
 				}
 
+				if (worker.aborted) {
+					continue; // Cleanup happens in next iteration
+				}
+
 				const { done, value } = readResult;
 
 				if (done) {
-					this._orchestrator.forgetWorker(worker);
-
-					if (worker.currentPos < worker.targetPos) {
-						throw new Error(
-							'Response stream reader stopped unexpectedly before all requested data was read.',
-						);
+					if (worker.currentPos >= worker.targetPos) {
+						// All data was delivered, we're good
+						this._orchestrator.forgetWorker(worker);
+						worker.running = false;
+						return;
 					}
 
-					worker.running = false;
-					return;
+					// The response stopped early, before the target. This can happen if server decides to cap range
+					// requests arbitrarily, even if the request had an uncapped end. In this case, let's fetch the rest
+					// of the data using a new request.
+					break;
 				}
 
 				this.onread?.(worker.currentPos, worker.currentPos + value.length);
@@ -521,33 +601,29 @@ export class UrlSource extends Source {
 			}
 		}
 
-		worker.running = false;
-
 		// The previous UrlSource had logic for circumventing https://issues.chromium.org/issues/436025873; I haven't
 		// been able to observe this bug with the new UrlSource (maybe because we're using response streaming), so the
 		// logic for that has vanished for now. Leaving a comment here if this becomes relevant again.
 	}
 
 	/** @internal */
-	private _getPartialLengthFromRangeResponse(response: Response) {
+	private _getTotalLengthFromRangeResponse(response: Response) {
 		const contentRange = response.headers.get('Content-Range');
 		if (contentRange) {
 			const match = /\/(\d+)/.exec(contentRange);
 			if (match) {
 				return Number(match[1]);
-			} else {
-				throw new Error(`Invalid Content-Range header: ${contentRange}`);
 			}
+		}
+
+		const contentLength = response.headers.get('Content-Length');
+		if (contentLength) {
+			return Number(contentLength);
 		} else {
-			const contentLength = response.headers.get('Content-Length');
-			if (contentLength) {
-				return Number(contentLength);
-			} else {
-				throw new Error(
-					'Partial HTTP response (status 206) must surface either Content-Range or'
-					+ ' Content-Length header.',
-				);
-			}
+			throw new Error(
+				'Partial HTTP response (status 206) must surface either Content-Range or'
+				+ ' Content-Length header.',
+			);
 		}
 	}
 
@@ -582,7 +658,7 @@ export class FilePathSource extends Source {
 	_fileHandle: FileHandle | null = null;
 
 	/** Creates a new {@link FilePathSource} backed by the file at the specified file path. */
-	constructor(filePath: string, options: BlobSourceOptions = {}) {
+	constructor(filePath: string, options: FilePathSourceOptions = {}) {
 		if (typeof filePath !== 'string') {
 			throw new TypeError('filePath must be a string.');
 		}
@@ -591,9 +667,9 @@ export class FilePathSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 
 		super();
@@ -704,9 +780,9 @@ export class StreamSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 		if (options.prefetchProfile && !['none', 'fileSystem', 'network'].includes(options.prefetchProfile)) {
 			throw new TypeError(
@@ -763,6 +839,10 @@ export class StreamSource extends Source {
 			let data = this._options.read(worker.currentPos, originalTargetPos);
 			if (data instanceof Promise) data = await data;
 
+			if (worker.aborted) {
+				break;
+			}
+
 			if (data instanceof Uint8Array) {
 				data = toUint8Array(data); // Normalize things like Node.js Buffer to Uint8Array
 
@@ -798,6 +878,10 @@ export class StreamSource extends Source {
 
 					if (!(value instanceof Uint8Array)) {
 						throw new TypeError('ReadableStream returned by options.read must yield Uint8Array chunks.');
+					}
+
+					if (worker.aborted) {
+						break;
 					}
 
 					const data = toUint8Array(value); // Normalize things like Node.js Buffer to Uint8Array
@@ -884,9 +968,9 @@ export class ReadableStreamSource extends Source {
 		}
 		if (
 			options.maxCacheSize !== undefined
-			&& (!Number.isInteger(options.maxCacheSize) || options.maxCacheSize < 0)
+			&& (!isNumber(options.maxCacheSize) || options.maxCacheSize < 0)
 		) {
-			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative integer.');
+			throw new TypeError('options.maxCacheSize, when provided, must be a non-negative number.');
 		}
 
 		super();
@@ -1191,6 +1275,7 @@ class ReadOrchestrator {
 	workers: ReadWorker[] = [];
 	cache: CacheEntry[] = [];
 	currentCacheSize = 0;
+	disposed = false;
 
 	constructor(public options: {
 		maxCacheSize: number;
@@ -1386,7 +1471,10 @@ class ReadOrchestrator {
 			currentPos: startPos,
 			targetPos,
 			running: false,
-			aborted: false,
+			// Due to async shenanigans, it can happen that workers are started after disposal. In this case, instead of
+			// simply not creating the worker, we allow it to run but immediately label it as aborted, so it can then
+			// shut itself down.
+			aborted: this.disposed,
 			pendingSlices: [],
 			age: this.nextAge++,
 		};
@@ -1439,6 +1527,8 @@ class ReadOrchestrator {
 
 	/** Called by a worker when it has read some data. */
 	supplyWorkerData(worker: ReadWorker, bytes: Uint8Array) {
+		assert(!worker.aborted);
+
 		const start = worker.currentPos;
 		const end = start + bytes.length;
 
@@ -1612,5 +1702,6 @@ class ReadOrchestrator {
 
 		this.workers.length = 0;
 		this.cache.length = 0;
+		this.disposed = true;
 	}
 }

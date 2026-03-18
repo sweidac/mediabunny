@@ -2,9 +2,11 @@
 
 <script src="../dist/bundles/mediabunny.cjs"></script>
 <script src="../packages/mp3-encoder/dist/bundles/mediabunny-mp3-encoder.js"></script>
+<script src="../packages/ac3/dist/bundles/mediabunny-ac3.js"></script>
 
 <script type="module">
 	//MediabunnyMp3Encoder.registerMp3Encoder();
+	MediabunnyAc3.registerAc3Encoder();
 
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
@@ -24,7 +26,7 @@
 			chunked: true,
 			chunkSize: 2**20
 		});
-		const outputFormat = new Mediabunny.Mp3OutputFormat({});
+		const outputFormat = new Mediabunny.Mp4OutputFormat({fastStart: 'fragmented'});
 
 		const button = document.createElement('button');
 		button.textContent = 'Cancel';
@@ -48,6 +50,7 @@
 			target
 		});
 
+		let ctx = null;
 		const conversion = await Mediabunny.Conversion.init({
 			input: new Mediabunny.Input({
 				formats: Mediabunny.ALL_FORMATS,	
@@ -55,7 +58,16 @@
 			}),
 			output,
 			audio: (_, n) => ({
-				discard: n > 1,
+				//codec: 'eac3',
+				//discard: true,
+				//discard: n > 1,
+				//codec: 'opus',
+				//codec: 'opus',
+				/*
+				process: (sample) => {
+					return sample;
+				},
+				*/
 				//codec: 'pcm-s16',
 				//sampleRate: 16000,
 				//numberOfChannels: 1,
@@ -92,6 +104,36 @@
 			},
 			*/
 			video: () => ({
+				//forceTranscode: true,
+				//forceTranscode: true,
+				//width: 1280,
+				//forceTranscode: true,
+				//allowRotationMetadata: false,
+				//width: 720,
+				//frameRate: 30,
+				//bitrate: Mediabunny.QUALITY_VERY_LOW,
+				//discard: true,
+				/*
+				process: (sample) => {
+					if (!ctx) {
+						// Create a canvas for image compositing
+						const canvas = new OffscreenCanvas(
+							sample.displayWidth,
+							sample.displayHeight,
+						);
+						ctx = canvas.getContext('2d');
+					}
+
+					console.log(ctx.canvas.width, ctx.canvas.height);
+
+					ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+					sample.drawWithFit(ctx, { fit: 'fill' });
+					//ctx.drawImage(watermark, 32, 32);
+
+					return ctx.canvas;
+				},
+				*/
+				//width: 300,
 				//alpha: 'keep',
 				//width: 320,
 				//discard: true,
@@ -128,7 +170,7 @@
 				//width: 200,
 				//height: 100,
 			}),
-			tags: {
+			tags: {} ?? {
 				title: 'Bigggy',
 				artist: 'Buck Bunny',
 				images: [{
@@ -146,8 +188,8 @@
 				}
 			},
 			trim: {
-				start: 10,
-				//end: 20
+				//start: 0,
+				end: 10
 			},
 		});
 		console.log(conversion);

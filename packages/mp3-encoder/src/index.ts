@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,10 +7,21 @@
  */
 
 import { CustomAudioEncoder, AudioCodec, AudioSample, EncodedPacket, registerEncoder } from 'mediabunny';
-import { FRAME_HEADER_SIZE, readFrameHeader, SAMPLING_RATES } from '../../../shared/mp3-misc';
+import { FRAME_HEADER_SIZE, readMp3FrameHeader, SAMPLING_RATES } from '../../../shared/mp3-misc';
 import type { WorkerCommand, WorkerResponse, WorkerResponseData } from './shared';
 // @ts-expect-error An esbuild plugin handles this, TypeScript doesn't need to understand
 import createWorker from './encode.worker';
+
+const MP3_ENCODER_LOADED_SYMBOL = Symbol.for('@mediabunny/mp3-encoder loaded');
+if ((globalThis as Record<symbol, unknown>)[MP3_ENCODER_LOADED_SYMBOL]) {
+	console.error(
+		'[WARNING]\n@mediabunny/mp3-encoder was loaded twice.'
+		+ ' This will likely cause the encoder not to work correctly.'
+		+ ' Check if multiple dependencies are importing different versions of @mediabunny/mp3-encoder,'
+		+ ' or if something is being bundled incorrectly.',
+	);
+}
+(globalThis as Record<symbol, unknown>)[MP3_ENCODER_LOADED_SYMBOL] = true;
 
 class Mp3Encoder extends CustomAudioEncoder {
 	private worker: Worker | null = null;
@@ -22,7 +33,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 
 	private buffer = new Uint8Array(2 ** 16);
 	private currentBufferOffset = 0;
-	private currentTimestamp = 0;
+	private currentTimestamp: number | null = null;
 	private chunkMetadata: EncodedAudioChunkMetadata = {};
 
 	static override supports(codec: AudioCodec, config: AudioDecoderConfig): boolean {
@@ -69,6 +80,12 @@ class Mp3Encoder extends CustomAudioEncoder {
 			},
 		});
 
+		this.resetInternalState();
+	}
+
+	private resetInternalState() {
+		this.currentBufferOffset = 0;
+		this.currentTimestamp = null;
 		this.chunkMetadata = {
 			decoderConfig: {
 				codec: 'mp3',
@@ -79,6 +96,11 @@ class Mp3Encoder extends CustomAudioEncoder {
 	}
 
 	async encode(audioSample: AudioSample) {
+		if (this.currentTimestamp === null) {
+			// The first sample's timestamp determines where we start
+			this.currentTimestamp = audioSample.timestamp;
+		}
+
 		const sizePerChannel = audioSample.allocationSize({
 			format: 's16-planar',
 			planeIndex: 0,
@@ -103,15 +125,15 @@ class Mp3Encoder extends CustomAudioEncoder {
 			},
 		}, [audioData]);
 
-		assert('encodedData' in result);
 		this.digestOutput(new Uint8Array(result.encodedData));
 	}
 
 	async flush() {
 		const result = await this.sendCommand({ type: 'flush' });
 
-		assert('flushedData' in result);
 		this.digestOutput(new Uint8Array(result.flushedData));
+
+		this.resetInternalState();
 	}
 
 	close() {
@@ -123,6 +145,8 @@ class Mp3Encoder extends CustomAudioEncoder {
 	 * these chunks and extract the MP3 frames only when they're complete.
 	 */
 	private digestOutput(bytes: Uint8Array) {
+		assert(this.currentTimestamp !== null);
+
 		const requiredBufferSize = this.currentBufferOffset + bytes.length;
 		if (requiredBufferSize > this.buffer.length) {
 			// Grow the buffer to the required size
@@ -138,7 +162,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 		let pos = 0;
 		while (pos <= this.currentBufferOffset - FRAME_HEADER_SIZE) {
 			const word = new DataView(this.buffer.buffer).getUint32(pos, false);
-			const header = readFrameHeader(word, null).header;
+			const header = readMp3FrameHeader(word, null).header;
 			if (!header) {
 				break;
 			}
@@ -153,9 +177,7 @@ class Mp3Encoder extends CustomAudioEncoder {
 			const duration = header.audioSamplesInFrame / header.sampleRate;
 			this.onPacket(new EncodedPacket(data, 'key', this.currentTimestamp, duration), this.chunkMetadata);
 
-			if (this.currentTimestamp === 0) {
-				this.chunkMetadata = {}; // Mimic WebCodecs-like behavior
-			}
+			this.chunkMetadata = {}; // Mimic WebCodecs-like behavior
 
 			this.currentTimestamp += duration;
 			pos += header.totalSize;
@@ -168,13 +190,16 @@ class Mp3Encoder extends CustomAudioEncoder {
 		}
 	}
 
-	private sendCommand(
-		command: WorkerCommand,
+	private sendCommand<T extends string>(
+		command: WorkerCommand & { type: T },
 		transferables?: Transferable[],
 	) {
-		return new Promise<WorkerResponseData>((resolve, reject) => {
+		return new Promise<WorkerResponseData & { type: T }>((resolve, reject) => {
 			const id = this.nextMessageId++;
-			this.pendingMessages.set(id, { resolve, reject });
+			this.pendingMessages.set(id, {
+				resolve: resolve as (value: WorkerResponseData) => void,
+				reject,
+			});
 
 			assert(this.worker);
 

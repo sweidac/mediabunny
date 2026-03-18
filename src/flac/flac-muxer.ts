@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10,7 +10,6 @@ import { validateAudioChunkMetadata } from '../codec';
 import { createVorbisComments, FlacBlockType } from '../codec-data';
 import {
 	assert,
-	Bitstream,
 	textEncoder,
 	toDataView,
 	toUint8Array,
@@ -20,15 +19,16 @@ import { Output, OutputAudioTrack } from '../output';
 import { FlacOutputFormat } from '../output-format';
 import { EncodedPacket } from '../packet';
 import { FileSlice, readBytes } from '../reader';
-import { AttachedImage, metadataTagsAreEmpty } from '../tags';
+import { AttachedImage, metadataTagsAreEmpty } from '../metadata';
 import { Writer } from '../writer';
 import {
 	readBlockSize,
 	getBlockSizeOrUncommon,
 	readCodedNumber,
 } from './flac-misc';
+import { Bitstream } from '../../shared/bitstream';
 
-const FLAC_HEADER = new Uint8Array([0x66, 0x4c, 0x61, 0x43]); // 'fLaC'
+const FLAC_HEADER = /* #__PURE__ */ new Uint8Array([0x66, 0x4c, 0x61, 0x43]); // 'fLaC'
 const STREAMINFO_SIZE = 38;
 const STREAMINFO_BLOCK_SIZE = 34;
 
@@ -207,12 +207,6 @@ export class FlacMuxer extends Muxer {
 	): Promise<void> {
 		const release = await this.mutex.acquire();
 
-		validateAudioChunkMetadata(meta);
-
-		assert(meta);
-		assert(meta.decoderConfig);
-		assert(meta.decoderConfig.description);
-
 		try {
 			this.validateAndNormalizeTimestamp(
 				track,
@@ -221,14 +215,16 @@ export class FlacMuxer extends Muxer {
 			);
 
 			if (this.sampleRate === null) {
+				// It's the first packet
+				validateAudioChunkMetadata(meta);
+
+				assert(meta);
+				assert(meta.decoderConfig);
+				assert(meta.decoderConfig.description);
+
 				this.sampleRate = meta.decoderConfig.sampleRate;
-			}
-
-			if (this.channels === null) {
 				this.channels = meta.decoderConfig.numberOfChannels;
-			}
 
-			if (this.bitsPerSample === null) {
 				const descriptionBitstream = new Bitstream(
 					toUint8Array(meta.decoderConfig.description),
 				);
@@ -244,7 +240,7 @@ export class FlacMuxer extends Muxer {
 			}
 
 			const slice = FileSlice.tempFromBytes(packet.data);
-			readBytes(slice, 2);
+			slice.skip(2);
 			const bytes = readBytes(slice, 2);
 			const bitstream = new Bitstream(bytes);
 			const blockSizeOrUncommon = getBlockSizeOrUncommon(bitstream.readBits(4));

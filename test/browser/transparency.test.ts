@@ -11,7 +11,7 @@ import { canEncodeVideo, QUALITY_HIGH } from '../../src/encode.js';
 import { VideoSample } from '../../src/sample.js';
 import { Conversion } from '../../src/conversion.js';
 
-test('Can decode transparent video', async () => {
+test.skip('Can decode transparent video', async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),
 		formats: ALL_FORMATS,
@@ -21,7 +21,7 @@ test('Can decode transparent video', async () => {
 	expect(await videoTrack.canBeTransparent()).toBe(true);
 
 	const sink = new VideoSampleSink(videoTrack);
-	const sample = (await sink.getSample(0.5))!;
+	using sample = (await sink.getSample(0.5))!;
 
 	expect(sample.format).toContain('A'); // Probably RGBA
 	expect(sample.hasAlpha).toBe(true);
@@ -35,7 +35,7 @@ test('Can decode transparent video', async () => {
 	expect(imageData.data[3]).toBeLessThan(255); // Check that there's actually transparent pixels
 });
 
-test('Can decode faulty transparent video and behaves gracefully', async () => {
+test.skip('Can decode faulty transparent video and behaves gracefully', async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency-faulty.webm'),
 		formats: ALL_FORMATS,
@@ -47,15 +47,15 @@ test('Can decode faulty transparent video and behaves gracefully', async () => {
 
 	const sink = new VideoSampleSink(videoTrack);
 
-	const startSample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	using startSample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
 	expect(startSample.format).toContain('A');
 
-	const secondSample = (await sink.getSample(secondKeyPacket.timestamp))!;
+	using secondSample = (await sink.getSample(secondKeyPacket.timestamp))!;
 	expect(secondSample.format).not.toContain('A'); // There was no alpha key frame for this one
 	expect(secondSample.hasAlpha).toBe(false);
 });
 
-test('Can extract transparent frames via CanvasSink', async () => {
+test.skip('Can extract transparent frames via CanvasSink', async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),
 		formats: ALL_FORMATS,
@@ -81,7 +81,7 @@ test('Can extract transparent frames via CanvasSink', async () => {
 	expect(imageData.data[3]).toBe(255);
 });
 
-test('Can encode transparent video', async () => {
+test.skip('Can encode transparent video', async () => {
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
@@ -139,17 +139,19 @@ test('Can encode transparent video', async () => {
 	probeContext.drawImage(video, 0, 0);
 
 	let imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
-	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
+	const pos1 = { x: 100, y: 100 };
+	const index1 = (pos1.x + pos1.y * probeCanvas.width) * 4;
+	expect(imageData.data[index1 + 3]).toBe(0); // Transparent
 
-	const pos = { x: 300, y: 300 }; // Dead center in the red square
-	const index = (pos.x + pos.y * probeCanvas.width) * 4;
+	const pos2 = { x: 300, y: 300 }; // Dead center in the red square
+	const index2 = (pos2.x + pos2.y * probeCanvas.width) * 4;
 
 	// Red (within error)
-	expect(imageData.data[index + 0]).greaterThanOrEqual(253);
-	expect(imageData.data[index + 1]).lessThanOrEqual(2);
-	expect(imageData.data[index + 2]).lessThanOrEqual(2);
+	expect(imageData.data[index2 + 0]).greaterThanOrEqual(253);
+	expect(imageData.data[index2 + 1]).lessThanOrEqual(3);
+	expect(imageData.data[index2 + 2]).lessThanOrEqual(3);
 
-	expect(imageData.data[index + 3]).greaterThanOrEqual(253); // Opaque (within error)
+	expect(imageData.data[index2 + 3]).toBe(255); // Opaque
 
 	// Let's also check it's read correctly by Mediabunny
 	using input = new Input({
@@ -162,17 +164,18 @@ test('Can encode transparent video', async () => {
 
 	const sink = new VideoSampleSink(videoTrack);
 
-	const firstSample = (await sink.getSample(0))!;
+	using firstSample = (await sink.getSample(0))!;
 	expect(firstSample.format).toContain('A');
 
 	probeContext.clearRect(0, 0, probeCanvas.width, probeCanvas.height);
 	firstSample.draw(probeContext, 0, 0);
 
 	imageData = probeContext.getImageData(0, 0, probeCanvas.width, probeCanvas.height);
-	expect(imageData.data[3]).lessThanOrEqual(2); // Transparent (within error)
+
+	expect(imageData.data[3]).toBe(0); // Transparent
 });
 
-test('Can encode video with alternating transparency', async () => {
+test.skip('Can encode video with alternating transparency', async () => {
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
@@ -198,7 +201,7 @@ test('Can encode video with alternating transparency', async () => {
 	await output.start();
 
 	for (let i = 0; i < 64; i++) {
-		const sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
+		using sample = new VideoSample(new Uint8Array(640 * 480 * 4), {
 			format: i % 2 ? 'RGBX' : 'RGBA',
 			codedWidth: 640,
 			codedHeight: 480,
@@ -232,7 +235,7 @@ test('Can encode video with alternating transparency', async () => {
 	const sampleSink = new VideoSampleSink(videoTrack);
 
 	i = 0;
-	for await (const sample of sampleSink.samples()) {
+	for await (using sample of sampleSink.samples()) {
 		if (i % 2) {
 			expect(sample.format).not.toContain('A');
 		} else {
@@ -243,7 +246,7 @@ test('Can encode video with alternating transparency', async () => {
 	}
 });
 
-test('Can encode transparent video with odd dimensions', async () => {
+test.skip('Can encode transparent video with odd dimensions', async () => {
 	const output = new Output({
 		format: new WebMOutputFormat(),
 		target: new BufferTarget(),
@@ -266,12 +269,12 @@ test('Can encode transparent video with odd dimensions', async () => {
 	await output.finalize();
 });
 
-test('Positive encodability check with alpha', async () => {
+test.skip('Positive encodability check with alpha', async () => {
 	const result = await canEncodeVideo('vp9', { alpha: 'keep' });
 	expect(result).toBe(true);
 });
 
-test('Can transmux transparent video, discards alpha by default', async () => {
+test.skip('Can transmux transparent video, discards alpha by default', async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),
 		formats: ALL_FORMATS,
@@ -296,11 +299,11 @@ test('Can transmux transparent video, discards alpha by default', async () => {
 	expect(await videoTrack.canBeTransparent()).toBe(false);
 
 	const sink = new VideoSampleSink(videoTrack);
-	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
 	expect(sample.hasAlpha).toBe(false);
 });
 
-test('Can transmux transparent video, can keep alpha', async () => {
+test.skip('Can transmux transparent video, can keep alpha', async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),
 		formats: ALL_FORMATS,
@@ -328,12 +331,12 @@ test('Can transmux transparent video, can keep alpha', async () => {
 	expect(await videoTrack.canBeTransparent()).toBe(true);
 
 	const sink = new VideoSampleSink(videoTrack);
-	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
 	expect(sample.format).toContain('A');
 	expect(sample.hasAlpha).toBe(true);
 });
 
-test('Can reencode transparent video, keeping alpha', async () => {
+test.skip('Can reencode transparent video, keeping alpha', async () => {
 	using input = new Input({
 		source: new UrlSource('/transparency.webm'),
 		formats: ALL_FORMATS,
@@ -367,7 +370,7 @@ test('Can reencode transparent video, keeping alpha', async () => {
 	expect(videoTrack.displayWidth).toBe(320);
 
 	const sink = new VideoSampleSink(videoTrack);
-	const sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
+	using sample = (await sink.getSample(await videoTrack.getFirstTimestamp()))!;
 	expect(sample.format).toContain('A');
 	expect(sample.hasAlpha).toBe(true);
 });

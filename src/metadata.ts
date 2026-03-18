@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -17,8 +17,9 @@
  * - For Ogg files, there is no global metadata so instead, the metadata refers to the combined metadata of all tracks,
  * in Vorbis-style comment headers.
  * - For WAVE files, the metadata refers to the chunks within the RIFF INFO chunk.
- * - For ADTS files, there is no metadata.
+ * - For ADTS files, the metadata refers to the ID3v2 tags.
  * - For FLAC files, the metadata lives in Vorbis style in the Vorbis comment block.
+ * - For MPEG-TS files, metadata tags are currently not supported.
  *
  * @group Metadata tags
  * @public
@@ -69,11 +70,13 @@ export type MetadataTags = {
 	 * values. Additionally, all attached files (such as font files) are included here, where the key corresponds to
 	 * the FileUID and the value is an {@link AttachedFile}.
 	 * - MP3: The ID3v2 tags, or a single `'TAG'` key with the contents of the ID3v1 tag.
+	 * - ADTS: The ID3v2 tags.
 	 * - Ogg: The key-value string pairs from the Vorbis-style comment header (see RFC 7845, Section 5.2).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
 	 * - WAVE: The individual metadata chunks within the RIFF INFO chunk. Values are always ISO 8859-1 strings.
 	 * - FLAC: The key-value string pairs from the vorbis metadata block (see RFC 9639, Section D.2.3).
 	 * Additionally, the `'vendor'` key refers to the vendor string within this header.
+	 * - MPEG-TS: Not supported.
 	*/
 	raw?: Record<string, string | Uint8Array | RichImageData | AttachedFile | null>;
 };
@@ -258,4 +261,63 @@ export const metadataTagsAreEmpty = (tags: MetadataTags) => {
 		&& (!tags.images || tags.images.length === 0)
 		&& tags.comment === undefined
 		&& (tags.raw === undefined || Object.keys(tags.raw).length === 0);
+};
+
+/**
+ * Specifies a track's disposition, i.e. information about its intended usage.
+ * @public
+ * @group Miscellaneous
+ */
+export type TrackDisposition = {
+	/**
+	 * Indicates that this track is eligible for automatic selection by a player; that it is the main track among other,
+	 * non-default tracks of the same type.
+	 */
+	default: boolean;
+	/**
+	 * Indicates that players should always display this track by default, even if it goes against the user's default
+	 * preferences. For example, a subtitle track only containing translations of foreign-language audio.
+	 */
+	forced: boolean;
+	/** Indicates that this track is in the content's original language. */
+	original: boolean;
+	/** Indicates that this track contains commentary. */
+	commentary: boolean;
+	/** Indicates that this track is intended for hearing-impaired users. */
+	hearingImpaired: boolean;
+	/** Indicates that this track is intended for visually-impaired users. */
+	visuallyImpaired: boolean;
+};
+
+export const DEFAULT_TRACK_DISPOSITION: TrackDisposition = {
+	default: true,
+	forced: false,
+	original: false,
+	commentary: false,
+	hearingImpaired: false,
+	visuallyImpaired: false,
+};
+
+export const validateTrackDisposition = (disposition: Partial<TrackDisposition>) => {
+	if (!disposition || typeof disposition !== 'object') {
+		throw new TypeError('disposition must be an object.');
+	}
+	if (disposition.default !== undefined && typeof disposition.default !== 'boolean') {
+		throw new TypeError('disposition.default must be a boolean.');
+	}
+	if (disposition.forced !== undefined && typeof disposition.forced !== 'boolean') {
+		throw new TypeError('disposition.forced must be a boolean.');
+	}
+	if (disposition.original !== undefined && typeof disposition.original !== 'boolean') {
+		throw new TypeError('disposition.original must be a boolean.');
+	}
+	if (disposition.commentary !== undefined && typeof disposition.commentary !== 'boolean') {
+		throw new TypeError('disposition.commentary must be a boolean.');
+	}
+	if (disposition.hearingImpaired !== undefined && typeof disposition.hearingImpaired !== 'boolean') {
+		throw new TypeError('disposition.hearingImpaired must be a boolean.');
+	}
+	if (disposition.visuallyImpaired !== undefined && typeof disposition.visuallyImpaired !== 'boolean') {
+		throw new TypeError('disposition.visuallyImpaired must be a boolean.');
+	}
 };

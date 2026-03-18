@@ -1,10 +1,12 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
+
+import { Bitstream } from '../shared/bitstream';
 
 export function assert(x: unknown): asserts x {
 	if (!x) {
@@ -38,85 +40,6 @@ export const last = <T>(arr: T[]) => {
 export const isU32 = (value: number) => {
 	return value >= 0 && value < 2 ** 32;
 };
-
-export class Bitstream {
-	/** Current offset in bits. */
-	pos = 0;
-
-	constructor(public bytes: Uint8Array) {}
-
-	seekToByte(byteOffset: number) {
-		this.pos = 8 * byteOffset;
-	}
-
-	private readBit() {
-		const byteIndex = Math.floor(this.pos / 8);
-		const byte = this.bytes[byteIndex] ?? 0;
-		const bitIndex = 0b111 - (this.pos & 0b111);
-		const bit = (byte & (1 << bitIndex)) >> bitIndex;
-
-		this.pos++;
-		return bit;
-	}
-
-	readBits(n: number) {
-		if (n === 1) {
-			return this.readBit();
-		}
-
-		let result = 0;
-
-		for (let i = 0; i < n; i++) {
-			result <<= 1;
-			result |= this.readBit();
-		}
-
-		return result;
-	}
-
-	writeBits(n: number, value: number) {
-		const end = this.pos + n;
-
-		for (let i = this.pos; i < end; i++) {
-			const byteIndex = Math.floor(i / 8);
-			let byte = this.bytes[byteIndex]!;
-			const bitIndex = 0b111 - (i & 0b111);
-
-			byte &= ~(1 << bitIndex);
-			byte |= ((value & (1 << (end - i - 1))) >> (end - i - 1)) << bitIndex;
-			this.bytes[byteIndex] = byte;
-		}
-
-		this.pos = end;
-	};
-
-	readAlignedByte() {
-		// Ensure we're byte-aligned
-		if (this.pos % 8 !== 0) {
-			throw new Error('Bitstream is not byte-aligned.');
-		}
-
-		const byteIndex = this.pos / 8;
-		const byte = this.bytes[byteIndex] ?? 0;
-
-		this.pos += 8;
-		return byte;
-	}
-
-	skipBits(n: number) {
-		this.pos += n;
-	}
-
-	getBitsLeft() {
-		return this.bytes.length * 8 - this.pos;
-	}
-
-	clone() {
-		const clone = new Bitstream(this.bytes);
-		clone.pos = this.pos;
-		return clone;
-	}
-}
 
 /** Reads an exponential-Golomb universal code from a Bitstream.  */
 export const readExpGolomb = (bitstream: Bitstream) => {
@@ -157,25 +80,25 @@ export const writeBits = (bytes: Uint8Array, start: number, end: number, value: 
 export const toUint8Array = (source: AllowSharedBufferSource): Uint8Array => {
 	if (source.constructor === Uint8Array) { // We want a true Uint8Array, not something that extends it like Buffer
 		return source;
-	} else if (source instanceof ArrayBuffer) {
-		return new Uint8Array(source);
-	} else {
+	} else if (ArrayBuffer.isView(source)) {
 		return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+	} else {
+		return new Uint8Array(source);
 	}
 };
 
-export const toDataView = (source: AllowSharedBufferSource) => {
+export const toDataView = (source: AllowSharedBufferSource): DataView => {
 	if (source.constructor === DataView) {
 		return source;
-	} else if (source instanceof ArrayBuffer) {
-		return new DataView(source);
-	} else {
+	} else if (ArrayBuffer.isView(source)) {
 		return new DataView(source.buffer, source.byteOffset, source.byteLength);
+	} else {
+		return new DataView(source);
 	}
 };
 
-export const textDecoder = new TextDecoder();
-export const textEncoder = new TextEncoder();
+export const textDecoder = /* #__PURE__ */ new TextDecoder();
+export const textEncoder = /* #__PURE__ */ new TextEncoder();
 
 export const isIso88591Compatible = (text: string) => {
 	for (let i = 0; i < text.length; i++) {
@@ -201,17 +124,17 @@ export const COLOR_PRIMARIES_MAP = {
 	bt2020: 9, // ITU-R BT.202
 	smpte432: 12, // SMPTE EG 432-1
 };
-export const COLOR_PRIMARIES_MAP_INVERSE = invertObject(COLOR_PRIMARIES_MAP);
+export const COLOR_PRIMARIES_MAP_INVERSE = /* #__PURE__ */ invertObject(COLOR_PRIMARIES_MAP);
 
 export const TRANSFER_CHARACTERISTICS_MAP = {
 	'bt709': 1, // ITU-R BT.709
 	'smpte170m': 6, // SMPTE 170M
 	'linear': 8, // Linear transfer characteristics
 	'iec61966-2-1': 13, // IEC 61966-2-1
-	'pg': 16, // Rec. ITU-R BT.2100-2 perceptual quantization (PQ) system
+	'pq': 16, // Rec. ITU-R BT.2100-2 perceptual quantization (PQ) system
 	'hlg': 18, // Rec. ITU-R BT.2100-2 hybrid loggamma (HLG) system
 };
-export const TRANSFER_CHARACTERISTICS_MAP_INVERSE = invertObject(TRANSFER_CHARACTERISTICS_MAP);
+export const TRANSFER_CHARACTERISTICS_MAP_INVERSE = /* #__PURE__ */ invertObject(TRANSFER_CHARACTERISTICS_MAP);
 
 export const MATRIX_COEFFICIENTS_MAP = {
 	'rgb': 0, // Identity
@@ -220,7 +143,7 @@ export const MATRIX_COEFFICIENTS_MAP = {
 	'smpte170m': 6, // SMPTE 170M
 	'bt2020-ncl': 9, // ITU-R BT.2020-2 (non-constant luminance)
 };
-export const MATRIX_COEFFICIENTS_MAP_INVERSE = invertObject(MATRIX_COEFFICIENTS_MAP);
+export const MATRIX_COEFFICIENTS_MAP_INVERSE = /* #__PURE__ */ invertObject(MATRIX_COEFFICIENTS_MAP);
 
 export type RequiredNonNull<T> = {
 	[K in keyof T]-?: NonNullable<T[K]>;
@@ -248,15 +171,27 @@ export const isAllowSharedBufferSource = (x: unknown) => {
 
 export class AsyncMutex {
 	currentPromise = Promise.resolve();
+	pending = 0;
 
 	async acquire() {
 		let resolver: () => void;
 		const nextPromise = new Promise<void>((resolve) => {
-			resolver = resolve;
+			let resolved = false;
+
+			resolver = () => {
+				if (resolved) {
+					return;
+				}
+
+				resolve();
+				this.pending--;
+				resolved = true;
+			};
 		});
 
 		const currentPromiseAlias = this.currentPromise;
 		this.currentPromise = nextPromise;
+		this.pending++;
 
 		await currentPromiseAlias;
 
@@ -486,13 +421,22 @@ export const clamp = (value: number, min: number, max: number) => {
 
 export const UNDETERMINED_LANGUAGE = 'und';
 
-export const roundToPrecision = (value: number, digits: number) => {
-	const factor = 10 ** digits;
-	return Math.round(value * factor) / factor;
+export const roundIfAlmostInteger = (value: number) => {
+	const rounded = Math.round(value);
+
+	if (Math.abs(value / rounded - 1) < 10 * Number.EPSILON) {
+		return rounded;
+	} else {
+		return value;
+	}
 };
 
 export const roundToMultiple = (value: number, multiple: number) => {
 	return Math.round(value / multiple) * multiple;
+};
+
+export const floorToMultiple = (value: number, multiple: number) => {
+	return Math.floor(value / multiple) * multiple;
 };
 
 export const ilog = (x: number) => {
@@ -578,7 +522,8 @@ export const retriedFetch = async (
 	fetchFn: typeof fetch,
 	url: string | URL | Request,
 	requestInit: RequestInit,
-	getRetryDelay: (previousAttempts: number, error: unknown) => number | null,
+	getRetryDelay: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null,
+	shouldStop: () => boolean,
 ) => {
 	let attempts = 0;
 
@@ -586,8 +531,12 @@ export const retriedFetch = async (
 		try {
 			return await fetchFn(url, requestInit);
 		} catch (error) {
+			if (shouldStop()) {
+				throw error;
+			}
+
 			attempts++;
-			const retryDelayInSeconds = getRetryDelay(attempts, error);
+			const retryDelayInSeconds = getRetryDelay(attempts, error, url);
 
 			if (retryDelayInSeconds === null) {
 				throw error;
@@ -601,6 +550,10 @@ export const retriedFetch = async (
 
 			if (retryDelayInSeconds > 0) {
 				await new Promise(resolve => setTimeout(resolve, 1000 * retryDelayInSeconds));
+			}
+
+			if (shouldStop()) {
+				throw error;
 			}
 		}
 	}
@@ -658,22 +611,22 @@ export class CallSerializer {
 	}
 }
 
-let isSafariCache: boolean | null = null;
-export const isSafari = () => {
-	if (isSafariCache !== null) {
-		return isSafariCache;
+let isWebKitCache: boolean | null = null;
+export const isWebKit = () => {
+	if (isWebKitCache !== null) {
+		return isWebKitCache;
 	}
 
-	const result = !!(
+	// This even returns true for WebKit-wrapping browsers such as Chrome on iOS
+	return isWebKitCache = !!(
 		typeof navigator !== 'undefined'
-		&& navigator.vendor?.match(/apple/i)
-		&& !navigator.userAgent?.match(/crios/i)
-		&& !navigator.userAgent?.match(/fxios/i)
-		&& !navigator.userAgent?.match(/Opera|OPT\//)
+		&& (
+			navigator.vendor?.match(/apple/i)
+			// Or, in workers:
+			|| (/AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent))
+			|| /\b(iPad|iPhone|iPod)\b/.test(navigator.userAgent)
+		)
 	);
-
-	isSafariCache = result;
-	return result;
 };
 
 let isFirefoxCache: boolean | null = null;
@@ -683,6 +636,36 @@ export const isFirefox = () => {
 	}
 
 	return isFirefoxCache = typeof navigator !== 'undefined' && navigator.userAgent?.includes('Firefox');
+};
+
+let isChromiumCache: boolean | null = null;
+export const isChromium = () => {
+	if (isChromiumCache !== null) {
+		return isChromiumCache;
+	}
+
+	return isChromiumCache = !!(
+		typeof navigator !== 'undefined'
+		&& (navigator.vendor?.includes('Google Inc') || /Chrome/.test(navigator.userAgent))
+	);
+};
+
+let chromiumVersionCache: number | null = null;
+export const getChromiumVersion = () => {
+	if (chromiumVersionCache !== null) {
+		return chromiumVersionCache;
+	}
+
+	if (typeof navigator === 'undefined') {
+		return null;
+	}
+
+	const match = /\bChrome\/(\d+)/.exec(navigator.userAgent);
+	if (!match) {
+		return null;
+	}
+
+	return chromiumVersionCache = Number(match[1]!);
 };
 
 /**
@@ -785,4 +768,244 @@ export const polyfillSymbolDispose = () => {
 	// https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html
 	// @ts-expect-error Readonly
 	Symbol.dispose ??= Symbol('Symbol.dispose');
+};
+
+export const isNumber = (x: unknown) => {
+	return typeof x === 'number' && !Number.isNaN(x);
+};
+
+/**
+ * A rational number; a ratio of two integers.
+ * @group Miscellaneous
+ * @public
+ */
+export type Rational = {
+	/** The numerator of the rational number. */
+	num: number;
+	/** The denominator of the rational number. */
+	den: number;
+};
+
+export const simplifyRational = (rational: Rational): Rational => {
+	assert(rational.den !== 0);
+
+	let a = Math.abs(rational.num);
+	let b = Math.abs(rational.den);
+
+	// Euclidean algorithm
+	while (b !== 0) {
+		const t = a % b;
+		a = b;
+		b = t;
+	}
+
+	const gcd = a || 1;
+	return {
+		num: rational.num / gcd,
+		den: rational.den / gcd,
+	};
+};
+
+/**
+ * Specifies a rectangular region where all quantities must be non-negative integers.
+ * @group Miscellaneous
+ * @public
+ */
+export type Rectangle = {
+	/** The distance in pixels to the left edge of the rectangle . */
+	left: number;
+	/** The distance in pixels to the top edge of the rectangle. */
+	top: number;
+	/** The width in pixels of the rectangle. */
+	width: number;
+	/** The height in pixels of the rectangle. */
+	height: number;
+};
+
+export const validateRectangle = (rect: Rectangle, propertyPath: string) => {
+	if (typeof rect !== 'object' || !rect) {
+		throw new TypeError(`${propertyPath} must be an object.`);
+	}
+	if (!Number.isInteger(rect.left) || rect.left < 0) {
+		throw new TypeError(`${propertyPath}.left must be a non-negative integer.`);
+	}
+	if (!Number.isInteger(rect.top) || rect.top < 0) {
+		throw new TypeError(`${propertyPath}.top must be a non-negative integer.`);
+	}
+	if (!Number.isInteger(rect.width) || rect.width < 0) {
+		throw new TypeError(`${propertyPath}.width must be a non-negative integer.`);
+	}
+	if (!Number.isInteger(rect.height) || rect.height < 0) {
+		throw new TypeError(`${propertyPath}.height must be a non-negative integer.`);
+	}
+};
+
+export type UnthrottledTimerHandle = {
+	id: ReturnType<typeof setTimeout> | number;
+};
+
+type UnthrottledTimerMessage =
+	| { type: 'set-timeout'; timerId: number; delay: number }
+	| { type: 'set-interval'; timerId: number; delay: number }
+	| { type: 'clear-timeout'; timerId: number }
+	| { type: 'clear-interval'; timerId: number };
+
+type UnthrottledTimerEvent = { type: 'fire'; timerId: number };
+
+let unthrottledTimerWorker: Worker | undefined;
+let nextUnthrottledTimerId = 1;
+const unthrottledTimeoutCallbacks = new Map<number, () => void>();
+const unthrottledIntervalCallbacks = new Map<number, () => void>();
+
+const shouldUseNativeTimers = () => {
+	return typeof window === 'undefined';
+};
+
+const unthrottledTimerWorkerMain = () => {
+	const timeoutHandles = new Map<number, ReturnType<typeof setTimeout>>();
+	const intervalHandles = new Map<number, ReturnType<typeof setInterval>>();
+
+	self.onmessage = (event: MessageEvent<UnthrottledTimerMessage>) => {
+		const message = event.data;
+
+		switch (message.type) {
+			case 'set-timeout': {
+				const handle = setTimeout(() => {
+					timeoutHandles.delete(message.timerId);
+					self.postMessage({ type: 'fire', timerId: message.timerId });
+				}, message.delay);
+
+				timeoutHandles.set(message.timerId, handle);
+			}; break;
+
+			case 'set-interval': {
+				const handle = setInterval(() => {
+					self.postMessage({ type: 'fire', timerId: message.timerId });
+				}, message.delay);
+
+				intervalHandles.set(message.timerId, handle);
+			}; break;
+
+			case 'clear-timeout': {
+				const handle = timeoutHandles.get(message.timerId);
+				if (handle !== undefined) {
+					clearTimeout(handle);
+					timeoutHandles.delete(message.timerId);
+				}
+			}; break;
+
+			case 'clear-interval': {
+				const handle = intervalHandles.get(message.timerId);
+				if (handle !== undefined) {
+					clearInterval(handle);
+					intervalHandles.delete(message.timerId);
+				}
+			}; break;
+		}
+	};
+};
+
+const getUnthrottledTimerWorker = () => {
+	if (unthrottledTimerWorker) {
+		return unthrottledTimerWorker;
+	}
+
+	const workerSource = `(${unthrottledTimerWorkerMain.toString()})();`;
+	const workerURL = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
+	unthrottledTimerWorker = new Worker(workerURL);
+	URL.revokeObjectURL(workerURL);
+
+	unthrottledTimerWorker.onmessage = (event: MessageEvent<UnthrottledTimerEvent>) => {
+		const message = event.data;
+
+		const timeoutCallback = unthrottledTimeoutCallbacks.get(message.timerId);
+		if (timeoutCallback) {
+			unthrottledTimeoutCallbacks.delete(message.timerId);
+			timeoutCallback();
+			return;
+		}
+
+		const intervalCallback = unthrottledIntervalCallbacks.get(message.timerId);
+		if (intervalCallback) {
+			intervalCallback();
+		}
+	};
+
+	return unthrottledTimerWorker;
+};
+
+export const setTimeoutUnthrottled = (
+	// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+	callback: Function,
+	delay: number,
+): UnthrottledTimerHandle => {
+	if (shouldUseNativeTimers()) {
+		return { id: setTimeout(callback, delay) };
+	}
+
+	const timerId = nextUnthrottledTimerId++;
+	unthrottledTimeoutCallbacks.set(timerId, () => {
+		(callback as () => void)();
+	});
+
+	getUnthrottledTimerWorker().postMessage({
+		type: 'set-timeout',
+		timerId,
+		delay,
+	} satisfies UnthrottledTimerMessage);
+
+	return { id: timerId };
+};
+
+export const clearTimeoutUnthrottled = (timer: UnthrottledTimerHandle) => {
+	if (shouldUseNativeTimers()) {
+		clearTimeout(timer.id);
+		return;
+	}
+
+	assert(typeof timer.id === 'number');
+	unthrottledTimeoutCallbacks.delete(timer.id);
+
+	getUnthrottledTimerWorker().postMessage({
+		type: 'clear-timeout',
+		timerId: timer.id,
+	} satisfies UnthrottledTimerMessage);
+};
+
+export const setIntervalUnthrottled = (
+	// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+	callback: Function,
+	delay: number,
+): UnthrottledTimerHandle => {
+	if (shouldUseNativeTimers()) {
+		return { id: setInterval(callback, delay) };
+	}
+
+	const timerId = nextUnthrottledTimerId++;
+	unthrottledIntervalCallbacks.set(timerId, () => {
+		(callback as () => void)();
+	});
+
+	getUnthrottledTimerWorker().postMessage({
+		type: 'set-interval',
+		timerId,
+		delay,
+	} satisfies UnthrottledTimerMessage);
+
+	return { id: timerId };
+};
+
+export const clearIntervalUnthrottled = (timer: UnthrottledTimerHandle) => {
+	if (shouldUseNativeTimers()) {
+		clearInterval(timer.id);
+		return;
+	}
+
+	assert(typeof timer.id === 'number');
+	unthrottledIntervalCallbacks.delete(timer.id);
+
+	getUnthrottledTimerWorker().postMessage({
+		type: 'clear-interval',
+		timerId: timer.id,
+	} satisfies UnthrottledTimerMessage);
 };

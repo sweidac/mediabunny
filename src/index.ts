@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,6 +8,17 @@
 
 /// <reference types="dom-mediacapture-transform" preserve="true" />
 /// <reference types="dom-webcodecs" preserve="true" />
+
+const MEDIABUNNY_LOADED_SYMBOL = Symbol.for('mediabunny loaded');
+if ((globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL]) {
+	console.error(
+		'[WARNING]\nMediabunny was loaded twice.'
+		+ ' This will likely cause Mediabunny not to work correctly.'
+		+ ' Check if multiple dependencies are importing different versions of Mediabunny,'
+		+ ' or if something is being bundled incorrectly.',
+	);
+}
+(globalThis as Record<symbol, unknown>)[MEDIABUNNY_LOADED_SYMBOL] = true;
 
 export {
 	Output,
@@ -31,6 +42,8 @@ export {
 	Mp3OutputFormat,
 	Mp3OutputFormatOptions,
 	Mp4OutputFormat,
+	MpegTsOutputFormat,
+	MpegTsOutputFormatOptions,
 	OggOutputFormat,
 	OggOutputFormatOptions,
 	WavOutputFormat,
@@ -51,6 +64,7 @@ export {
 	EncodedAudioPacketSource,
 	EncodedVideoPacketSource,
 	MediaStreamAudioTrackSource,
+	MediaStreamVideoTrackSourceOptions,
 	MediaStreamVideoTrackSource,
 	TextSubtitleSource,
 	VideoSampleSource,
@@ -92,6 +106,8 @@ export {
 export {
 	Target,
 	BufferTarget,
+	FilePathTarget,
+	FilePathTargetOptions,
 	NullTarget,
 	StreamTarget,
 	StreamTargetOptions,
@@ -100,6 +116,8 @@ export {
 export {
 	AnyIterable,
 	MaybePromise,
+	Rational,
+	Rectangle,
 	Rotation,
 	SetRequired,
 } from './misc';
@@ -124,25 +142,27 @@ export {
 export {
 	InputFormat,
 	AdtsInputFormat,
+	FlacInputFormat,
 	IsobmffInputFormat,
 	MatroskaInputFormat,
 	Mp3InputFormat,
 	Mp4InputFormat,
+	MpegTsInputFormat,
 	OggInputFormat,
 	QuickTimeInputFormat,
 	WaveInputFormat,
 	WebMInputFormat,
-	FlacInputFormat,
 	ALL_FORMATS,
 	ADTS,
+	FLAC,
 	MATROSKA,
 	MP3,
 	MP4,
+	MPEG_TS,
 	OGG,
 	QTFF,
 	WAVE,
 	WEBM,
-	FLAC,
 } from './input-format';
 export {
 	Input,
@@ -166,7 +186,10 @@ export {
 	AudioSampleCopyToOptions,
 	VideoSample,
 	VideoSampleInit,
+	VideoSamplePixelFormat,
+	VideoSampleColorSpace,
 	CropRectangle,
+	VIDEO_SAMPLE_PIXEL_FORMATS,
 } from './sample';
 export {
 	AudioBufferSink,
@@ -185,6 +208,7 @@ export {
 	ConversionOptions,
 	ConversionVideoOptions,
 	ConversionAudioOptions,
+	ConversionCanceledError,
 	DiscardedTrack,
 } from './conversion';
 export {
@@ -200,6 +224,7 @@ export {
 	AttachedImage,
 	RichImageData,
 	AttachedFile,
-} from './tags';
+	TrackDisposition,
+} from './metadata';
 
 // 🐡🦔

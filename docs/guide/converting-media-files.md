@@ -16,6 +16,7 @@ It has the following features:
 - Video transparency removal/preservation
 - Audio resampling
 - Audio up/downmixing
+- User-defined video & audio processing
 
 The conversion API was built to be simple, versatile and extremely performant.
 
@@ -107,7 +108,7 @@ Sometimes, you may want to cancel an ongoing conversion process. For this, use t
 await conversion.cancel(); // Resolves once the conversion is canceled
 ```
 
-This automatically frees up all resources used by the conversion process.
+This automatically frees up all resources used by the conversion process and will cause any ongoing call to `execute` to throw a `ConversionCanceledError`.
 
 ## Video options
 
@@ -119,13 +120,23 @@ type ConversionVideoOptions = {
 	height?: number;
 	fit?: 'fill' | 'contain' | 'cover';
 	rotate?: 0 | 90 | 180 | 270;
+	allowRotationMetadata?: boolean;
 	crop?: { left: number; top: number; width: number; height: number };
 	frameRate?: number;
 	codec?: VideoCodec;
 	bitrate?: number | Quality;
 	alpha?: 'discard' | 'keep'; // Defaults to 'discard'
+	hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+	keyFrameInterval?: number;
 	forceTranscode?: boolean;
+	process?: (sample: VideoSample) => MaybePromise<
+		CanvasImageSource | VideoSample | (CanvasImageSource | VideoSample)[] | null
+	>;
+	processedWidth?: number;
+	processedHeight?: number;
 };
+
+type MaybePromise<T> = T | Promise<T>;
 ```
 
 For example, here we resize the video track to 720p:
@@ -166,6 +177,8 @@ In the rare case that the input video changes size over time, the `fit` field ca
 
 `rotation` rotates the video by the specified number of degrees clockwise. This rotation is applied on top of any rotation metadata in the original input file and happens before cropping and resizing.
 
+By default, Mediabunny will try to make use of rotation metadata in the output file to perform the rotation whenever possible. However, if you don't want this to happen, or you want to use Mediabunny to strip all rotation metadata from a file, you can set `allowRotationMetadata` to `false`.
+
 ### Cropping video
 
 `crop` can be used to extract a rectangular region from the original video. The rectangle is specified using `left`, `top`, `width` and `height` and is clamped to the dimensions of the video. Cropping is applied after rotation but before resizing.
@@ -180,7 +193,43 @@ Use the `codec` property to control the codec of the output track. This should b
 
 Use the `bitrate` property to control the bitrate of the output video. For example, you can use this field to compress the video track. Accepted values are the number of bits per second or a [subjective quality](./media-sources#subjective-qualities). If this property is set, transcoding will always happen. If this property is not set but transcoding is still required, `QUALITY_HIGH` will be used as the value.
 
+Use the `keyFrameInterval` property to control the maximum interval in seconds between key frames in the output video. Setting this fields forces a transcode.
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
+
+Use the `hardwareAcceleration` property to control whether hardware or software acceleration is used for video transcoding.
+
+### Processing video
+
+The `process` property can be used to define a custom video sample processing function, e.g. for [applying overlays](./quick-start#add-a-video-overlay), color transformations, or timestamp modifications. You are expected to perform this processing yourself, for example using the Canvas API.
+
+An example:
+```ts
+let ctx: CanvasRenderingContext2D | null = null;
+const conversion = await Conversion.init({
+	video: {
+		process: (sample) => {
+			if (!ctx) {
+				const canvas = new OffscreenCanvas(
+					sample.displayWidth,
+					sample.displayHeight,
+				);
+				ctx = canvas.getContext('2d')!;
+
+				// Convert the video to grayscale
+				ctx.filter = 'saturate(0)';
+			}
+			
+			sample.draw(ctx, 0, 0);
+
+			return ctx.canvas;
+		},
+	},
+});
+```
+
+The function is called for each input video sample after transformations and frame rate corrections. It must return a [`VideoSample`](./packets-and-samples#videosample), something that can convert to a `VideoSample`, an array of them, or `null` for dropping the frame.
+
+This function can also be used to manually resize frames. When doing so, you should signal the post-process dimensions using the `processedWidth` and `processedHeight` fields, which enables the encoder to better know what to expect.
 
 ## Audio options
 
@@ -193,7 +242,14 @@ type ConversionAudioOptions = {
 	numberOfChannels?: number;
 	sampleRate?: number;
 	forceTranscode?: boolean;
+	process?: (sample: AudioSample) => MaybePromise<
+		AudioSample | AudioSample[] | null
+	>;
+	processedNumberOfChannels?: number;
+	processedSampleRate?: number;
 };
+
+type MaybePromise<T> = T | Promise<T>;
 ```
 
 For example, here we convert the audio track to mono and set a specific sample rate:
@@ -230,6 +286,14 @@ Use the `bitrate` property to control the bitrate of the output audio. For examp
 
 If you want to prevent direct copying of media data and force a transcoding step, use `forceTranscode: true`.
 
+### Processing audio
+
+The `process` property can be used to define a custom audio sample processing function, e.g. for applying audio effects, transformations, or timestamp modifications. You are expected to perform this processing yourself.
+
+The function is called for each input audio sample after remixing and resampling. It must return an [`AudioSample`](./packets-and-samples#audiosample), an array of them, or `null` for dropping the sample.
+
+This function can also be used to manually perform remixing or resampling. When doing so, you should signal the post-process parameters using the `processedNumberOfChannels` and `processedSampleRate` fields, which enables the encoder to better know what to expect.
+
 ## Track-specific options
 
 You may want to configure your video and audio options differently depending on the specifics of the input track. Or, in case a media file has multiple video or audio tracks, you may want to discard only specific tracks or configure each track separately.
@@ -242,8 +306,8 @@ const conversion = await Conversion.init({
 	output,
 
 	// Function gets invoked for each video track:
-	video: (videoTrack, n) => {
-		if (n > 1) {
+	video: (videoTrack) => {
+		if (videoTrack.number > 1) {
 			// Keep only the first video track
 			return { discard: true };
 		}
@@ -255,7 +319,7 @@ const conversion = await Conversion.init({
 	},
 
 	// Async functions work too:
-	audio: async (audioTrack, n) => {
+	audio: async (audioTrack) => {
 		if (audioTrack.languageCode !== 'rus') {
 			// Keep only Russian audio tracks
 			return { discard: true };
@@ -300,6 +364,21 @@ const conversion = await Conversion.init({
 In this case, the output will be 15 seconds long.
 
 If only `start` is set, the clip will run until the end of the input file. If only `end` is set, the clip will start at the beginning of the input file.
+
+Note that when using the trimming defaults, the resulting media file will always begin at timestamp 0. If your input file has a start time offset (like is common with MPEG-TS files) and you want to retain that, use `trim: { start: 0 }` to ensure timestamps don't get shifted.
+
+---
+
+You can even use negative trimming values to offset the start of the media:
+```ts
+const conversion = await Conversion.init({
+	// ...
+	trim: {
+		start: -2, // Two seconds of no media data (freeze frame / silence) at the start
+	},
+	// ...
+});
+```
 
 ## Metadata tags
 

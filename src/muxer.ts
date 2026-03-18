@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -46,42 +46,45 @@ export abstract class Muxer {
 
 	private trackTimestampInfo = new WeakMap<OutputTrack, {
 		maxTimestamp: number;
-		maxTimestampBeforeLastKeyFrame: number;
+		maxTimestampBeforeLastKeyPacket: number | null;
 	}>();
 
-	protected validateAndNormalizeTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyFrame: boolean) {
+	protected validateAndNormalizeTimestamp(track: OutputTrack, timestampInSeconds: number, isKeyPacket: boolean) {
 		timestampInSeconds += track.source._timestampOffset;
-
-		let timestampInfo = this.trackTimestampInfo.get(track);
-		if (!timestampInfo) {
-			if (!isKeyFrame) {
-				throw new Error('First frame must be a key frame.');
-			}
-
-			timestampInfo = {
-				maxTimestamp: timestampInSeconds,
-				maxTimestampBeforeLastKeyFrame: timestampInSeconds,
-			};
-			this.trackTimestampInfo.set(track, timestampInfo);
-		}
 
 		if (timestampInSeconds < 0) {
 			throw new Error(`Timestamps must be non-negative (got ${timestampInSeconds}s).`);
 		}
 
-		if (isKeyFrame) {
-			timestampInfo.maxTimestampBeforeLastKeyFrame = timestampInfo.maxTimestamp;
-		}
+		let timestampInfo = this.trackTimestampInfo.get(track);
+		if (!timestampInfo) {
+			if (!isKeyPacket) {
+				throw new Error('First packet must be a key packet.');
+			}
 
-		if (timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyFrame) {
-			throw new Error(
-				`Timestamps cannot be smaller than the highest timestamp of the previous GOP (a GOP begins with a key`
-				+ ` frame and ends right before the next key frame). Got ${timestampInSeconds}s, but highest timestamp`
-				+ ` is ${timestampInfo.maxTimestampBeforeLastKeyFrame}s.`,
-			);
-		}
+			timestampInfo = {
+				maxTimestamp: timestampInSeconds,
+				maxTimestampBeforeLastKeyPacket: null,
+			};
+			this.trackTimestampInfo.set(track, timestampInfo);
+		} else {
+			if (isKeyPacket) {
+				timestampInfo.maxTimestampBeforeLastKeyPacket = timestampInfo.maxTimestamp;
+			}
 
-		timestampInfo.maxTimestamp = Math.max(timestampInfo.maxTimestamp, timestampInSeconds);
+			if (
+				timestampInfo.maxTimestampBeforeLastKeyPacket !== null
+				&& timestampInSeconds < timestampInfo.maxTimestampBeforeLastKeyPacket
+			) {
+				throw new Error(
+					`Timestamps cannot be smaller than the largest timestamp of the previous GOP (a GOP begins with a`
+					+ ` key packet and ends right before the next key packet). Got ${timestampInSeconds}s, but largest`
+					+ ` timestamp is ${timestampInfo.maxTimestampBeforeLastKeyPacket}s.`,
+				);
+			}
+
+			timestampInfo.maxTimestamp = Math.max(timestampInfo.maxTimestamp, timestampInSeconds);
+		}
 
 		return timestampInSeconds;
 	}

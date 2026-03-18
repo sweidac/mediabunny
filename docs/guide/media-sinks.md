@@ -97,9 +97,13 @@ await sink.getKeyPacket(5); // => EncodedPacket | null
 
 When retrieving a packet using a timestamp, the last packet (in [presentation order](#decode-vs-presentation-order)) with a timestamp less than or equal to the search timestamp will be returned. The methods return `null` if there exists no such packet.
 
-There is a special method for retrieving the first packet (in [decode order](#decode-vs-presentation-order)):
+There are special methods for retrieving the first packet (in [decode order](#decode-vs-presentation-order)):
 ```ts
 await sink.getFirstPacket(); // => EncodedPacket | null
+
+// The first packet is typically a key frame, but this is not required.
+// This method returns the first key frame:
+await sink.getFirstKeyPacket(); // => EncodedPacket | null
 ```
 The last packet (in [presentation order](#decode-vs-presentation-order)) can be retrieved like so:
 ```ts
@@ -350,7 +354,7 @@ type CanvasSinkOptions = {
 - `rotation`\
 	The clockwise rotation by which to rotate the raw video frame. Defaults to the rotation set in the file metadata. Rotation is applied before cropping and resizing.
 - `crop`\
-	Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to the dimensions of the input video track. Cropping is performed after rotation but before resizing.
+	Specifies the rectangular region of the input video to crop to. The crop region will automatically be clamped to the dimensions of the input video track. Cropping is performed after rotation but before resizing. The crop region is in the _display pixel space_ of the underlying video data.
 - `poolSize`\
 	See [Canvas pool](#canvas-pool).
 
@@ -374,7 +378,7 @@ new CanvasSink(videoTrack, {
 	fit: 'cover',
 });
 
-// This sink yields canvases with the unaltered coded dimensions of the track,
+// This sink yields canvases with the unrotated dimensions of the track,
 // and without applying any rotation.
 new CanvasSink(videoTrack, {
 	rotation: 0,

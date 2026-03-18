@@ -194,9 +194,12 @@ This format ensures [append-only writing](#append-only-writing).
 The following options are available:
 ```ts
 type OggOutputFormatOptions = {
+	maximumPageDuration?: number;
 	onPage?: (data: Uint8Array, position: number, source: MediaSource) => unknown;
 };
 ```
+- `maximumPageDuration`\
+	The maximum duration in seconds of each Ogg page. Pages will be flushed early if adding another packet would cause the page to exceed this duration. This is useful for streaming contexts where more frequent page output is desired. By default, pages are only flushed when they exceed a certain size.
 - `onPage`\
 	Will be called for each finalized Ogg page of the output file. The [media source](./media-sources) backing the page's track (logical bitstream) is also passed.
 
@@ -272,6 +275,10 @@ const output = new Output({
 });
 ```
 
+::: info
+This format ensures [append-only writing](#append-only-writing).
+:::
+
 The following options are available:
 ```ts
 type AdtsOutputFormatOptions = {
@@ -285,7 +292,7 @@ type AdtsOutputFormatOptions = {
 
 This output format creates FLAC (.flac) files.
 ```ts
-import { Output, FlacOutputFormat } from 'mediabunny';	
+import { Output, FlacOutputFormat } from 'mediabunny';
 
 const output = new Output({
 	format: new FlacOutputFormat(options),
@@ -301,3 +308,28 @@ type FlacOutputFormatOptions = {
 ```
 - `onFrame`\
 	Will be called for each FLAC frame that is written.
+
+## MPEG-TS
+
+This output format creates MPEG Transport Stream (.ts) files.
+```ts
+import { Output, MpegTsOutputFormat } from 'mediabunny';
+
+const output = new Output({
+	format: new MpegTsOutputFormat(options),
+	// ...
+});
+```
+
+::: info
+This format ensures [append-only writing](#append-only-writing).
+:::
+
+The following options are available:
+```ts
+type MpegTsOutputFormatOptions = {
+	onPacket?: (data: Uint8Array, position: number) => unknown;
+};
+```
+- `onPacket`\
+	Will be called for each 188-byte Transport Stream packet that is written.

@@ -38,8 +38,15 @@ export default tseslint.config(
 			'dist-docs',
 			'packages/mp3-encoder/dist',
 			'packages/mp3-encoder/build',
+			'packages/ac3/dist',
+			'packages/ac3/build',
+			'packages/aac-encoder/dist',
+			'packages/aac-encoder/build',
+			'packages/flac-encoder/dist',
+			'packages/flac-encoder/build',
 			'eslint.config.mjs',
 			'docs/.vitepress/cache',
+			'test/public',
 		]
 	}
 );

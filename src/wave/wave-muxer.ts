@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -15,7 +15,7 @@ import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { WavOutputFormat } from '../output-format';
 import { assert, assertNever, isIso88591Compatible, keyValueIterator } from '../misc';
-import { MetadataTags, metadataTagsAreEmpty } from '../tags';
+import { MetadataTags, metadataTagsAreEmpty } from '../metadata';
 import { Id3V2Writer } from '../id3';
 
 export class WaveMuxer extends Muxer {

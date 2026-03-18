@@ -1,13 +1,13 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { Bitstream } from '../../shared/bitstream';
 import {
-	Bitstream,
 	COLOR_PRIMARIES_MAP,
 	MATRIX_COEFFICIENTS_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
@@ -19,7 +19,9 @@ import {
 	keyValueIterator,
 	normalizeRotation,
 	promiseWithResolvers,
+	Rational,
 	roundToMultiple,
+	simplifyRational,
 	textEncoder,
 	toUint8Array,
 	uint8ArraysAreEqual,
@@ -47,6 +49,7 @@ import {
 	inlineTimestampRegex,
 	parseSubtitleTimestamp,
 } from '../subtitles';
+import { aacChannelMap, aacFrequencyTable, buildAacAudioSpecificConfig } from '../../shared/aac-misc';
 import {
 	OPUS_SAMPLE_RATE,
 	PCM_AUDIO_CODECS,
@@ -59,11 +62,13 @@ import {
 	validateSubtitleMetadata,
 	validateVideoChunkMetadata,
 } from '../codec';
+import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from '../adts/adts-reader';
+import { FileSlice } from '../reader';
 import { Muxer } from '../muxer';
 import { Writer } from '../writer';
 import { EncodedPacket } from '../packet';
 import { parseOpusIdentificationHeader } from '../codec-data';
-import { AttachedFile } from '../tags';
+import { AttachedFile } from '../metadata';
 
 const MIN_CLUSTER_TIMESTAMP_MS = -(2 ** 15);
 const MAX_CLUSTER_TIMESTAMP_MS = 2 ** 15 - 1;
@@ -88,6 +93,7 @@ type MatroskaTrackData = {
 	info: {
 		width: number;
 		height: number;
+		aspectRatio: Rational | null;
 		decoderConfig: VideoDecoderConfig;
 		alphaMode: boolean;
 	};
@@ -98,6 +104,11 @@ type MatroskaTrackData = {
 		numberOfChannels: number;
 		sampleRate: number;
 		decoderConfig: AudioDecoderConfig;
+		/**
+		 * The "ADTS stripping" involves removing the ADTS header from each AAC packet. SOBMFF stores raw AAC data, not
+		 * ADTS-wrapped data.
+		 */
+		requiresAdtsStripping: boolean;
 	};
 } | {
 	track: OutputSubtitleTrack;
@@ -304,6 +315,24 @@ export class MatroskaMuxer extends Muxer {
 				{ id: EBMLId.TrackNumber, data: trackData.track.id },
 				{ id: EBMLId.TrackUID, data: trackData.track.id },
 				{ id: EBMLId.TrackType, data: TRACK_TYPE_MAP[trackData.type] },
+				trackData.track.metadata.disposition?.default === false
+					? { id: EBMLId.FlagDefault, data: 0 }
+					: null,
+				trackData.track.metadata.disposition?.forced
+					? { id: EBMLId.FlagForced, data: 1 }
+					: null,
+				trackData.track.metadata.disposition?.hearingImpaired
+					? { id: EBMLId.FlagHearingImpaired, data: 1 }
+					: null,
+				trackData.track.metadata.disposition?.visuallyImpaired
+					? { id: EBMLId.FlagVisualImpaired, data: 1 }
+					: null,
+				trackData.track.metadata.disposition?.original
+					? { id: EBMLId.FlagOriginal, data: 1 }
+					: null,
+				trackData.track.metadata.disposition?.commentary
+					? { id: EBMLId.FlagCommentary, data: 1 }
+					: null,
 				{ id: EBMLId.FlagLacing, data: 0 },
 				{ id: EBMLId.Language, data: trackData.track.metadata.languageCode ?? UNDETERMINED_LANGUAGE },
 				{ id: EBMLId.CodecID, data: codecId },
@@ -340,10 +369,19 @@ export class MatroskaMuxer extends Muxer {
 		// Convert from clockwise to counter-clockwise
 		const flippedRotation = rotation ? normalizeRotation(-rotation) : 0;
 
+		const hasNonSquarePixelAspectRatio
+			= !!trackData.info.aspectRatio && (
+				trackData.info.aspectRatio.num * trackData.info.height
+				!== trackData.info.aspectRatio.den * trackData.info.width
+			);
+
 		const colorSpace = trackData.info.decoderConfig.colorSpace;
 		const videoElement: EBMLElement = { id: EBMLId.Video, data: [
 			{ id: EBMLId.PixelWidth, data: trackData.info.width },
 			{ id: EBMLId.PixelHeight, data: trackData.info.height },
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayWidth, data: trackData.info.aspectRatio!.num } : null),
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayHeight, data: trackData.info.aspectRatio!.den } : null),
+			(hasNonSquarePixelAspectRatio ? { id: EBMLId.DisplayUnit, data: 3 } : null), // 3 = display aspect ratio
 			trackData.info.alphaMode ? { id: EBMLId.AlphaMode, data: 1 } : null,
 			(colorSpaceIsComplete(colorSpace)
 				? {
@@ -710,12 +748,23 @@ export class MatroskaMuxer extends Muxer {
 		assert(meta.decoderConfig.codedWidth !== undefined);
 		assert(meta.decoderConfig.codedHeight !== undefined);
 
+		const displayAspectWidth = meta.decoderConfig.displayAspectWidth;
+		const displayAspectHeight = meta.decoderConfig.displayAspectHeight;
+
+		const aspectRatio = displayAspectWidth === undefined || displayAspectHeight === undefined
+			? null
+			: simplifyRational({
+					num: displayAspectWidth,
+					den: displayAspectHeight,
+				});
+
 		const newTrackData: MatroskaVideoTrackData = {
 			track,
 			type: 'video',
 			info: {
 				width: meta.decoderConfig.codedWidth,
 				height: meta.decoderConfig.codedHeight,
+				aspectRatio,
 				decoderConfig: meta.decoderConfig,
 				alphaMode: !!packet.sideData.alpha, // The first packet determines if this track has alpha or not
 			},
@@ -754,7 +803,7 @@ export class MatroskaMuxer extends Muxer {
 		return newTrackData;
 	}
 
-	private getAudioTrackData(track: OutputAudioTrack, meta?: EncodedAudioChunkMetadata) {
+	private getAudioTrackData(track: OutputAudioTrack, packet: EncodedPacket, meta?: EncodedAudioChunkMetadata) {
 		const existingTrackData = this.trackDatas.find(x => x.track === track);
 		if (existingTrackData) {
 			return existingTrackData as MatroskaAudioTrackData;
@@ -765,13 +814,45 @@ export class MatroskaMuxer extends Muxer {
 		assert(meta);
 		assert(meta.decoderConfig);
 
+		const decoderConfig = { ...meta.decoderConfig };
+		let requiresAdtsStripping = false;
+
+		if (track.source._codec === 'aac' && !decoderConfig.description) {
+			// Matroska stores raw AAC with AudioSpecificConfig in CodecPrivate, not ADTS-wrapped data.
+			// Parse the first packet to extract the AudioSpecificConfig.
+			const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packet.data));
+			if (!adtsFrame) {
+				throw new Error(
+					'Couldn\'t parse ADTS header from the AAC packet. Make sure the packets are in ADTS format'
+					+ ' (as specified in ISO 13818-7) when not providing a description, or provide a description'
+					+ ' (must be an AudioSpecificConfig as specified in ISO 14496-3) and ensure the packets'
+					+ ' are raw AAC data.',
+				);
+			}
+
+			const sampleRate = aacFrequencyTable[adtsFrame.samplingFrequencyIndex];
+			const numberOfChannels = aacChannelMap[adtsFrame.channelConfiguration];
+
+			if (sampleRate === undefined || numberOfChannels === undefined) {
+				throw new Error('Invalid ADTS frame header.');
+			}
+
+			decoderConfig.description = buildAacAudioSpecificConfig({
+				objectType: adtsFrame.objectType,
+				sampleRate,
+				numberOfChannels,
+			});
+			requiresAdtsStripping = true;
+		}
+
 		const newTrackData: MatroskaAudioTrackData = {
 			track,
 			type: 'audio',
 			info: {
 				numberOfChannels: meta.decoderConfig.numberOfChannels,
 				sampleRate: meta.decoderConfig.sampleRate,
-				decoderConfig: meta.decoderConfig,
+				decoderConfig,
+				requiresAdtsStripping,
 			},
 			chunkQueue: [],
 			lastWrittenMsTimestamp: null,
@@ -852,11 +933,24 @@ export class MatroskaMuxer extends Muxer {
 		const release = await this.mutex.acquire();
 
 		try {
-			const trackData = this.getAudioTrackData(track, meta);
+			const trackData = this.getAudioTrackData(track, packet, meta);
+
+			let packetData = packet.data;
+			if (trackData.info.requiresAdtsStripping) {
+				const adtsFrame = readAdtsFrameHeader(FileSlice.tempFromBytes(packetData));
+				if (!adtsFrame) {
+					throw new Error('Expected ADTS frame, didn\'t get one.');
+				}
+
+				const headerLength = adtsFrame.crcCheck === null
+					? MIN_ADTS_FRAME_HEADER_SIZE
+					: MAX_ADTS_FRAME_HEADER_SIZE;
+				packetData = packetData.subarray(headerLength);
+			}
 
 			const isKeyFrame = packet.type === 'key';
 			const timestamp = this.validateAndNormalizeTimestamp(trackData.track, packet.timestamp, isKeyFrame);
-			const audioChunk = this.createInternalChunk(packet.data, timestamp, packet.duration, packet.type);
+			const audioChunk = this.createInternalChunk(packetData, timestamp, packet.duration, packet.type);
 
 			trackData.chunkQueue.push(audioChunk);
 			await this.interleaveChunks();

@@ -1,11 +1,12 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { buildAacAudioSpecificConfig, parseAacAudioSpecificConfig } from '../shared/aac-misc';
 import {
 	AUDIO_CODECS,
 	AudioCodec,
@@ -23,10 +24,15 @@ import {
 	assertNever,
 	CallSerializer,
 	clamp,
+	clearIntervalUnthrottled,
 	isFirefox,
+	last,
 	promiseWithResolvers,
 	setInt24,
+	setIntervalUnthrottled,
 	setUint24,
+	toUint8Array,
+	UnthrottledTimerHandle,
 } from './misc';
 import { Muxer } from './muxer';
 import { SubtitleParser } from './subtitles';
@@ -130,12 +136,10 @@ export abstract class MediaSource {
 
 	/** @internal */
 	async _flushOrWaitForOngoingClose(forceClose: boolean) {
-		if (this._closingPromise) {
-			// Since closing also flushes, we don't want to do it twice
-			return this._closingPromise;
-		} else {
-			return this._flushAndClose(forceClose);
-		}
+		return this._closingPromise ??= (async () => {
+			await this._flushAndClose(forceClose);
+			this._closed = true;
+		})();
 	}
 }
 
@@ -225,7 +229,6 @@ class VideoEncoderWrapper {
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
 	private error: Error | null = null;
-	private errorNeedsNewStack = true;
 
 	constructor(private source: VideoSource, private encodingConfig: VideoEncodingConfig) {}
 
@@ -411,11 +414,12 @@ class VideoEncoderWrapper {
 	}
 
 	private ensureEncoder(videoSample: VideoSample) {
-		const encoderError = new Error();
 		this.ensureEncoderPromise = (async () => {
 			const encoderConfig = buildVideoEncoderConfig({
 				width: videoSample.codedWidth,
 				height: videoSample.codedHeight,
+				squarePixelWidth: videoSample.squarePixelWidth,
+				squarePixelHeight: videoSample.squarePixelHeight,
 				...this.encodingConfig,
 				framerate: this.source._connectedTrack?.metadata.frameRate,
 			});
@@ -446,7 +450,6 @@ class VideoEncoderWrapper {
 					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
 						.catch((error) => {
 							this.error ??= error;
-							this.errorNeedsNewStack = false;
 						});
 				};
 
@@ -518,9 +521,10 @@ class VideoEncoderWrapper {
 					void this.muxer!.addEncodedVideoPacket(this.source._connectedTrack!, packet, meta)
 						.catch((error) => {
 							this.error ??= error;
-							this.errorNeedsNewStack = false;
 						});
 				};
+
+				const stack = new Error('Encoding error').stack;
 
 				this.encoder = new VideoEncoder({
 					output: (chunk, meta) => {
@@ -558,13 +562,15 @@ class VideoEncoderWrapper {
 						}
 					},
 					error: (error) => {
-						error.stack = encoderError.stack; // Provide a more useful stack trace
+						error.stack = stack; // Provide a more useful stack trace, the default one sucks
 						this.error ??= error;
 					},
 				});
 				this.encoder.configure(encoderConfig);
 
 				if (this.encodingConfig.alpha === 'keep') {
+					const stack = new Error('Encoding error').stack;
+
 					// We need to encode alpha as well, which we do with a separate encoder
 					this.alphaEncoder = new VideoEncoder({
 						// We ignore the alpha chunk's metadata
@@ -592,7 +598,7 @@ class VideoEncoderWrapper {
 							}
 						},
 						error: (error) => {
-							error.stack = encoderError.stack; // Provide a more useful stack trace
+							error.stack = stack; // Provide a more useful stack trace
 							this.error ??= error;
 						},
 					});
@@ -650,10 +656,6 @@ class VideoEncoderWrapper {
 
 	checkForEncoderError() {
 		if (this.error) {
-			if (this.errorNeedsNewStack) {
-				this.error.stack = new Error().stack; // Provide an even more useful stack trace
-			}
-
 			throw this.error;
 		}
 	}
@@ -1028,6 +1030,21 @@ export class CanvasSource extends VideoSource {
 }
 
 /**
+ * Options for MediaStreamVideoTrackSource.
+ * @group Media sources
+ * @public
+ */
+export type MediaStreamVideoTrackSourceOptions = {
+	/**
+	 * The frame rate at which the underlying video track is sampled. Defaults to the frame rate specified in the
+	 * track's [`MediaTrackSettings`](https://developer.mozilla.org/en-US/docs/Web/API/MediaTrackSettings). Set to
+	 * `null` to only add a frame whenever the underlying track pushes one - this minimizes frame count but can
+	 * lead to wildly irregular FPS.
+	 */
+	frameRate?: number | null;
+};
+
+/**
  * Video source that encodes the frames of a
  * [`MediaStreamVideoTrack`](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrack) and pipes them into the
  * output. This is useful for capturing live or real-time data such as webcams or screen captures. Frames will
@@ -1037,6 +1054,8 @@ export class CanvasSource extends VideoSource {
  * @public
  */
 export class MediaStreamVideoTrackSource extends VideoSource {
+	/** @internal */
+	private _options: MediaStreamVideoTrackSourceOptions;
 	/** @internal */
 	private _encoder: VideoEncoderWrapper;
 	/** @internal */
@@ -1051,6 +1070,14 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 	private _promiseWithResolvers = promiseWithResolvers();
 	/** @internal */
 	private _errorPromiseAccessed = false;
+	/** @internal */
+	private _paused = false;
+	/** @internal */
+	private _lastVideoFrame: VideoFrame | null = null;
+	/** @internal */
+	private _timerHandle: UnthrottledTimerHandle | null = null;
+	/** @internal */
+	private _videoElement: HTMLVideoElement | null = null;
 
 	/** A promise that rejects upon any error within this source. This promise never resolves. */
 	get errorPromise() {
@@ -1058,16 +1085,31 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 		return this._promiseWithResolvers.promise;
 	}
 
+	/** Whether this source is currently paused as a result of calling `.pause()`. */
+	get paused() {
+		return this._paused;
+	}
+
 	/**
 	 * Creates a new {@link MediaStreamVideoTrackSource} from a
 	 * [`MediaStreamVideoTrack`](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrack), which will pull
 	 * video samples from the stream in real time and encode them according to {@link VideoEncodingConfig}.
 	 */
-	constructor(track: MediaStreamVideoTrack, encodingConfig: VideoEncodingConfig) {
+	constructor(
+		track: MediaStreamVideoTrack,
+		encodingConfig: VideoEncodingConfig,
+		options: MediaStreamVideoTrackSourceOptions = {},
+	) {
 		if (!(track instanceof MediaStreamTrack) || track.kind !== 'video') {
 			throw new TypeError('track must be a video MediaStreamTrack.');
 		}
 		validateVideoEncodingConfig(encodingConfig);
+		if (typeof options !== 'object' || !options) {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.frameRate != null && (typeof options.frameRate !== 'number' || options.frameRate <= 0)) {
+			throw new TypeError('options.frameRate, when provided, must be either a positive number or null.');
+		}
 
 		encodingConfig = {
 			...encodingConfig,
@@ -1075,6 +1117,8 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 		};
 
 		super(encodingConfig.codec);
+
+		this._options = options;
 		this._encoder = new VideoEncoderWrapper(this, encodingConfig);
 		this._track = track;
 	}
@@ -1088,37 +1132,122 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 			);
 		}
 
+		const frameRate = this._options.frameRate !== undefined
+			? this._options.frameRate
+			: (this._track.getSettings().frameRate ?? null);
+
 		this._abortController = new AbortController();
 
 		let firstVideoFrameTimestamp: number | null = null;
+		let lastFrameTime: number | null = null;
+		let frameCount = 0;
 		let errored = false;
+		let lastSampleTimestamp: number | null = null;
+		let pauseOffset = 0;
+
+		const tick = () => {
+			assert(frameRate !== null);
+
+			if (!this._lastVideoFrame) {
+				return;
+			}
+
+			assert(lastFrameTime !== null);
+			assert(firstVideoFrameTimestamp !== null);
+
+			const now = performance.now();
+
+			// Add as many frames as warranted by the elapsed time.
+			// > instead of >= intentionally because tick() is called before the _lastVideoFrame is changed
+			while (now - lastFrameTime > 1000 / frameRate) {
+				lastFrameTime += 1000 / frameRate;
+				const timestamp = firstVideoFrameTimestamp + frameCount / frameRate;
+
+				const frame = new VideoFrame(this._videoElement ?? this._lastVideoFrame, {
+					timestamp: 1e6 * timestamp,
+					duration: 1e6 / frameRate,
+				});
+
+				addVideoFrame(frame, now);
+			}
+		};
+
+		if (frameRate !== null) {
+			this._timerHandle = setIntervalUnthrottled(tick, 4); // Run it at 250 Hz
+		}
 
 		const onVideoFrame = (videoFrame: VideoFrame) => {
+			if (frameRate === null) {
+				addVideoFrame(videoFrame);
+			} else {
+				const now = performance.now();
+
+				if (!this._lastVideoFrame) {
+					addVideoFrame(videoFrame.clone(), now);
+					lastFrameTime = now;
+					this._lastVideoFrame = videoFrame;
+				} else {
+					tick();
+					this._lastVideoFrame?.close();
+					this._lastVideoFrame = videoFrame;
+				}
+			}
+		};
+
+		const addVideoFrame = (videoFrame: VideoFrame, now = performance.now()) => {
 			if (errored) {
 				videoFrame.close();
 				return;
 			}
 
+			frameCount++;
+			const currentTimestamp = videoFrame.timestamp / 1e6;
+
+			if (this._paused) {
+				const frameSeen = firstVideoFrameTimestamp !== null;
+				if (frameSeen) {
+					if (lastSampleTimestamp !== null) {
+						// In addition to dropping this frame, let's also keep track of the time we have lost due to the
+						// pause. Doing it like this instead of simply keeping track of the paused time is better since
+						// it retains the frame rate of the underlying source.
+						const timeDelta = currentTimestamp - lastSampleTimestamp;
+						// We modify this field instead of _timestampOffset since we still might have data in flight
+						// in the encoder, with which we don't want to mess.
+						pauseOffset -= timeDelta;
+					}
+					lastSampleTimestamp = currentTimestamp;
+				}
+
+				videoFrame.close();
+				return;
+			}
+
 			if (firstVideoFrameTimestamp === null) {
-				firstVideoFrameTimestamp = videoFrame.timestamp / 1e6;
+				firstVideoFrameTimestamp = currentTimestamp;
 
 				const muxer = this._connectedTrack!.output._muxer;
 				if (muxer.firstMediaStreamTimestamp === null) {
-					muxer.firstMediaStreamTimestamp = performance.now() / 1000;
+					muxer.firstMediaStreamTimestamp = now / 1000;
 					this._timestampOffset = -firstVideoFrameTimestamp;
 				} else {
-					this._timestampOffset = (performance.now() / 1000 - muxer.firstMediaStreamTimestamp)
+					this._timestampOffset = (now / 1000 - muxer.firstMediaStreamTimestamp)
 						- firstVideoFrameTimestamp;
 				}
 			}
 
-			if (this._encoder.getQueueSize() >= 4) {
+			lastSampleTimestamp = currentTimestamp;
+
+			if (this._encoder.getQueueSize() >= 8) {
 				// Drop frames if the encoder is overloaded
 				videoFrame.close();
 				return;
 			}
 
-			void this._encoder.add(new VideoSample(videoFrame), true)
+			const sample = new VideoSample(videoFrame, {
+				timestamp: currentTimestamp + pauseOffset,
+			});
+
+			void this._encoder.add(sample, true)
 				.catch((error) => {
 					errored = true;
 
@@ -1159,7 +1288,7 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 					type: 'videoTrack',
 					trackId: this._workerTrackId,
 					track: this._track,
-				}, [this._track]);
+				});
 
 				this._workerListener = (event: MessageEvent) => {
 					const message = event.data as MediaStreamTrackProcessorWorkerMessage;
@@ -1172,10 +1301,59 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 				};
 
 				mediaStreamTrackProcessorWorker!.addEventListener('message', this._workerListener);
+			} else if (frameRate !== null) {
+				// No MediaStreamTrackProcessor support at all (e.g. Firefox), but we have a frame rate, so we can
+				// manually sample from a hidden <video> element instead.
+				const video = document.createElement('video');
+				video.style.position = 'fixed';
+				video.style.left = '-10000px';
+				video.style.top = '-10000px';
+				video.style.width = '1px';
+				video.style.height = '1px';
+				video.style.opacity = '0';
+				video.style.pointerEvents = 'none';
+				video.muted = true;
+				video.srcObject = new MediaStream([this._track]);
+				document.body.appendChild(video);
+				this._videoElement = video;
+
+				video.addEventListener('loadeddata', () => {
+					if (errored || !this._videoElement) {
+						return;
+					}
+
+					// This will be the first frame
+					const frame = new VideoFrame(video, {
+						timestamp: 1000 * performance.now(),
+					});
+					onVideoFrame(frame);
+					frame.close();
+				}, { once: true });
+
+				void video.play().catch((error) => {
+					errored = true;
+					this._promiseWithResolvers.reject(error);
+				});
 			} else {
-				throw new Error('MediaStreamTrackProcessor is required but not supported by this browser.');
+				throw new Error(
+					'When no explicit frame rate is set, MediaStreamTrackProcessor is required; but it\'s not supported'
+					+ ' by this browser.',
+				);
 			}
 		}
+	}
+
+	/**
+	 * Pauses the capture of video frames - any video frames emitted by the underlying media stream will be ignored
+	 * while paused. This does *not* close the underlying `MediaStreamVideoTrack`, it just ignores its output.
+	 */
+	pause() {
+		this._paused = true;
+	}
+
+	/** Resumes the capture of video frames after being paused. */
+	resume() {
+		this._paused = false;
 	}
 
 	/** @internal */
@@ -1183,6 +1361,17 @@ export class MediaStreamVideoTrackSource extends VideoSource {
 		if (this._abortController) {
 			this._abortController.abort();
 			this._abortController = null;
+		}
+
+		if (this._timerHandle) {
+			clearIntervalUnthrottled(this._timerHandle);
+		}
+		this._lastVideoFrame?.close();
+
+		if (this._videoElement) {
+			this._videoElement.srcObject = null;
+			this._videoElement.remove();
+			this._videoElement = null;
 		}
 
 		if (this._workerTrackId !== null) {
@@ -1290,13 +1479,14 @@ class AudioEncoderWrapper {
 	private customEncoderCallSerializer = new CallSerializer();
 	private customEncoderQueueSize = 0;
 
+	private lastEndSampleIndex: number | null = null;
+
 	/**
 	 * Encoders typically throw their errors "out of band", meaning asynchronously in some other execution context.
 	 * However, we want to surface these errors to the user within the normal control flow, so they don't go uncaught.
 	 * So, we keep track of the encoder error and throw it as soon as we get the chance.
 	 */
 	private error: Error | null = null;
-	private errorNeedsNewStack = true;
 
 	constructor(private source: AudioSource, private encodingConfig: AudioEncodingConfig) {}
 
@@ -1337,6 +1527,41 @@ class AudioEncoderWrapper {
 				}
 			}
 			assert(this.encoderInitialized);
+
+			// Handle padding of gaps with silence to avoid audio drift over time, like in
+			// https://github.com/Vanilagy/mediabunny/issues/176
+			// TODO An open question is how encoders deal with the first AudioData having a non-zero timestamp, and with
+			// AudioDatas that have an overlapping timestamp range.
+			{
+				const startSampleIndex = Math.round(
+					audioSample.timestamp * audioSample.sampleRate,
+				);
+				const endSampleIndex = Math.round(
+					(audioSample.timestamp + audioSample.duration) * audioSample.sampleRate,
+				);
+
+				if (this.lastEndSampleIndex === null) {
+					this.lastEndSampleIndex = endSampleIndex;
+				} else {
+					const sampleDiff = startSampleIndex - this.lastEndSampleIndex;
+
+					if (sampleDiff >= 64) {
+						// The gap is big enough, let's add a correction sample
+						const fillSample = new AudioSample({
+							data: new Float32Array(sampleDiff * audioSample.numberOfChannels),
+							format: 'f32-planar',
+							sampleRate: audioSample.sampleRate,
+							numberOfChannels: audioSample.numberOfChannels,
+							numberOfFrames: sampleDiff,
+							timestamp: this.lastEndSampleIndex / audioSample.sampleRate,
+						});
+
+						await this.add(fillSample, true); // Recursive call
+					}
+
+					this.lastEndSampleIndex += audioSample.numberOfFrames;
+				}
+			}
 
 			if (this.customEncoder) {
 				this.customEncoderQueueSize++;
@@ -1456,7 +1681,6 @@ class AudioEncoderWrapper {
 	}
 
 	private ensureEncoder(audioSample: AudioSample) {
-		const encoderError = new Error();
 		this.ensureEncoderPromise = (async () => {
 			const { numberOfChannels, sampleRate } = audioSample;
 
@@ -1492,7 +1716,6 @@ class AudioEncoderWrapper {
 					void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
 						.catch((error) => {
 							this.error ??= error;
-							this.errorNeedsNewStack = false;
 						});
 				};
 
@@ -1513,19 +1736,46 @@ class AudioEncoderWrapper {
 					);
 				}
 
+				const stack = new Error('Encoding error').stack;
+
 				this.encoder = new AudioEncoder({
 					output: (chunk, meta) => {
+						// WebKit emits an invalid description for AAC (https://bugs.webkit.org/show_bug.cgi?id=302253),
+						// which we try to detect here. If detected, we'll provide our own description instead, derived
+						// from the codec string and audio parameters.
+						if (this.encodingConfig.codec === 'aac' && meta?.decoderConfig) {
+							let needsDescriptionOverwrite = false;
+							if (!meta.decoderConfig.description || meta.decoderConfig.description.byteLength < 2) {
+								needsDescriptionOverwrite = true;
+							} else {
+								const audioSpecificConfig = parseAacAudioSpecificConfig(
+									toUint8Array(meta.decoderConfig.description),
+								);
+
+								needsDescriptionOverwrite = audioSpecificConfig.objectType === 0;
+							}
+
+							if (needsDescriptionOverwrite) {
+								const objectType = Number(last(encoderConfig.codec.split('.')));
+
+								meta.decoderConfig.description = buildAacAudioSpecificConfig({
+									objectType,
+									numberOfChannels: meta.decoderConfig.numberOfChannels,
+									sampleRate: meta.decoderConfig.sampleRate,
+								});
+							}
+						}
+
 						const packet = EncodedPacket.fromEncodedChunk(chunk);
 
 						this.encodingConfig.onEncodedPacket?.(packet, meta);
 						void this.muxer!.addEncodedAudioPacket(this.source._connectedTrack!, packet, meta)
 							.catch((error) => {
 								this.error ??= error;
-								this.errorNeedsNewStack = false;
 							});
 					},
 					error: (error) => {
-						error.stack = encoderError.stack; // Provide a more useful stack trace
+						error.stack = stack; // Provide a more useful stack trace
 						this.error ??= error;
 					},
 				});
@@ -1666,10 +1916,6 @@ class AudioEncoderWrapper {
 
 	checkForEncoderError() {
 		if (this.error) {
-			if (this.errorNeedsNewStack) {
-				this.error.stack = new Error().stack; // Provide an even more useful stack trace
-			}
-
 			throw this.error;
 		}
 	}
@@ -1790,11 +2036,18 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 	private _promiseWithResolvers = promiseWithResolvers();
 	/** @internal */
 	private _errorPromiseAccessed = false;
+	/** @internal */
+	private _paused = false;
 
 	/** A promise that rejects upon any error within this source. This promise never resolves. */
 	get errorPromise() {
 		this._errorPromiseAccessed = true;
 		return this._promiseWithResolvers.promise;
+	}
+
+	/** Whether this source is currently paused as a result of calling `.pause()`. */
+	get paused() {
+		return this._paused;
 	}
 
 	/**
@@ -1816,45 +2069,83 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 	override async _start() {
 		if (!this._errorPromiseAccessed) {
 			console.warn(
-				'Make sure not to ignore the `errorPromise` field on MediaStreamVideoTrackSource, so that any internal'
+				'Make sure not to ignore the `errorPromise` field on MediaStreamAudioTrackSource, so that any internal'
 				+ ' errors get bubbled up properly.',
 			);
 		}
 
 		this._abortController = new AbortController();
 
+		let firstAudioDataTimestamp: number | null = null;
+		let errored = false;
+		let lastSampleTimestamp: number | null = null;
+		let pauseOffset = 0;
+
+		const onAudioSample = (audioSample: AudioSample) => {
+			if (errored) {
+				audioSample.close();
+				return;
+			}
+
+			const currentTimestamp = audioSample.timestamp;
+
+			if (this._paused) {
+				const dataSeen = firstAudioDataTimestamp !== null;
+				if (dataSeen) {
+					if (lastSampleTimestamp !== null) {
+						// In addition to dropping this sample, let's also keep track of the time we have lost due to
+						// the pause. Doing it like this instead of simply keeping track of the paused time is better
+						// since it retains the sample rate of the underlying source.
+						const timeDelta = currentTimestamp - lastSampleTimestamp;
+						// We modify this field instead of _timestampOffset since we still might have data in flight
+						// in the encoder, with which we don't want to mess.
+						pauseOffset -= timeDelta;
+					}
+					lastSampleTimestamp = currentTimestamp;
+				}
+
+				audioSample.close();
+				return;
+			}
+
+			if (firstAudioDataTimestamp === null) {
+				firstAudioDataTimestamp = audioSample.timestamp;
+
+				const muxer = this._connectedTrack!.output._muxer;
+				if (muxer.firstMediaStreamTimestamp === null) {
+					muxer.firstMediaStreamTimestamp = performance.now() / 1000;
+					this._timestampOffset = -firstAudioDataTimestamp;
+				} else {
+					this._timestampOffset = (performance.now() / 1000 - muxer.firstMediaStreamTimestamp)
+						- firstAudioDataTimestamp;
+				}
+			}
+
+			lastSampleTimestamp = currentTimestamp;
+
+			if (this._encoder.getQueueSize() >= 8) {
+				// Drop data if the encoder is overloaded
+				audioSample.close();
+				return;
+			}
+
+			audioSample.setTimestamp(currentTimestamp + pauseOffset);
+
+			void this._encoder.add(audioSample, true)
+				.catch((error) => {
+					errored = true;
+
+					this._abortController?.abort();
+					this._promiseWithResolvers.reject(error);
+					void this._audioContext?.suspend();
+				});
+		};
+
 		if (typeof MediaStreamTrackProcessor !== 'undefined') {
 			// Great, MediaStreamTrackProcessor is supported, this is the preferred way of doing things
-			let firstAudioDataTimestamp: number | null = null;
-
 			const processor = new MediaStreamTrackProcessor({ track: this._track });
 			const consumer = new WritableStream<AudioData>({
-				write: (audioData) => {
-					if (firstAudioDataTimestamp === null) {
-						firstAudioDataTimestamp = audioData.timestamp / 1e6;
-
-						const muxer = this._connectedTrack!.output._muxer;
-						if (muxer.firstMediaStreamTimestamp === null) {
-							muxer.firstMediaStreamTimestamp = performance.now() / 1000;
-							this._timestampOffset = -firstAudioDataTimestamp;
-						} else {
-							this._timestampOffset = (performance.now() / 1000 - muxer.firstMediaStreamTimestamp)
-								- firstAudioDataTimestamp;
-						}
-					}
-
-					if (this._encoder.getQueueSize() >= 4) {
-						// Drop data if the encoder is overloaded
-						audioData.close();
-						return;
-					}
-
-					void this._encoder.add(new AudioSample(audioData), true)
-						.catch((error) => {
-							this._abortController?.abort();
-							this._promiseWithResolvers.reject(error);
-						});
-				},
+				write: audioData => onAudioSample(new AudioSample(audioData)),
 			});
 
 			processor.readable.pipeTo(consumer, {
@@ -1882,7 +2173,6 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 			sourceNode.connect(this._scriptProcessorNode);
 			this._scriptProcessorNode.connect(this._audioContext.destination);
 
-			let audioReceived = false;
 			let totalDuration = 0;
 
 			this._scriptProcessorNode.onaudioprocess = (event) => {
@@ -1890,31 +2180,23 @@ export class MediaStreamAudioTrackSource extends AudioSource {
 				totalDuration += event.inputBuffer.duration;
 
 				for (const audioSample of iterator) {
-					if (!audioReceived) {
-						audioReceived = true;
-
-						const muxer = this._connectedTrack!.output._muxer;
-						if (muxer.firstMediaStreamTimestamp === null) {
-							muxer.firstMediaStreamTimestamp = performance.now() / 1000;
-						} else {
-							this._timestampOffset = performance.now() / 1000 - muxer.firstMediaStreamTimestamp;
-						}
-					}
-
-					if (this._encoder.getQueueSize() >= 4) {
-						// Drop data if the encoder is overloaded
-						audioSample.close();
-						continue;
-					}
-
-					void this._encoder.add(audioSample, true)
-						.catch((error) => {
-							void this._audioContext!.suspend();
-							this._promiseWithResolvers.reject(error);
-						});
+					onAudioSample(audioSample);
 				}
 			};
 		}
+	}
+
+	/**
+	 * Pauses the capture of audio data - any audio data emitted by the underlying media stream will be ignored
+	 * while paused. This does *not* close the underlying `MediaStreamAudioTrack`, it just ignores its output.
+	 */
+	pause() {
+		this._paused = true;
+	}
+
+	/** Resumes the capture of audio data after being paused. */
+	resume() {
+		this._paused = false;
 	}
 
 	/** @internal */
@@ -1978,17 +2260,19 @@ const mediaStreamTrackProcessorWorkerCode = () => {
 	});
 
 	const abortControllers = new Map<number, AbortController>();
-	const stoppedTracks = new Set<number>();
+	const activeTracks = new Map<number, MediaStreamVideoTrack>();
 
 	self.addEventListener('message', (event) => {
 		const message = event.data as MediaStreamTrackProcessorControllerMessage;
 
 		switch (message.type) {
 			case 'videoTrack': {
+				activeTracks.set(message.trackId, message.track);
+
 				const processor = new MediaStreamTrackProcessor({ track: message.track });
 				const consumer = new WritableStream<VideoFrame>({
 					write: (videoFrame) => {
-						if (stoppedTracks.has(message.trackId)) {
+						if (!activeTracks.has(message.trackId)) {
 							videoFrame.close();
 							return;
 						}
@@ -2026,7 +2310,9 @@ const mediaStreamTrackProcessorWorkerCode = () => {
 					abortControllers.delete(message.trackId);
 				}
 
-				stoppedTracks.add(message.trackId);
+				const track = activeTracks.get(message.trackId);
+				track?.stop();
+				activeTracks.delete(message.trackId);
 
 				sendMessage({
 					type: 'trackStopped',

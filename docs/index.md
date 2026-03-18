@@ -91,24 +91,41 @@ const bundleSizes = [
 
 const sponsors = {
 	gold: [
-		{ image: '/sponsors/remotion.png', name: 'Remotion', url: 'https://remotion.dev/' },
+		{ image: '/sponsors/remotion-light.png', name: 'Remotion', url: 'https://remotion.dev/' },
 		{ image: '/sponsors/gling.svg', name: 'Gling AI', url: 'https://www.gling.ai/' },
 		{ image: '/sponsors/diffusionstudio.png', name: 'Diffusion Studio', url: 'https://diffusion.studio/' },
 		{ image: '/sponsors/kino.jpg', name: 'Kino', url: 'https://kino.ai/' },
+		{ image: '/sponsors/screen-studio.webp', name: 'Screen Studio', url: 'https://screen.studio/' },
+		{ image: '/sponsors/tella.svg', name: 'Tella', url: 'https://www.tella.com/' },
+	],
+	silver: [
+		{ image: '/sponsors/ponder.png', name: 'Ponder', url: 'https://ponder.ai/' },
 	],
 	bronze: [
-		{ image: '/sponsors/rve.svg', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
+		{ image: '/sponsors/elevenlabs.png', name: 'ElevenLabs', url: 'https://elevenlabs.io/' },
+		{ image: '/sponsors/rve.png', name: 'React Video Editor', url: 'https://www.reactvideoeditor.com/' },
 		{ image: '/sponsors/mux.jpg', name: 'Mux', url: 'https://www.mux.com/' },
+		{ image: '/sponsors/jellypod.png', name: 'Jellypod', url: 'https://jellypod.ai/' },
 	],
 	individual: [
-		{ image: 'https://avatars.githubusercontent.com/u/84167135', name: 'Memenome', url: 'https://github.com/memenome' },
+		{ image: '/sponsors/pintura-labs.png', name: 'Pintura Labs', url: 'https://pqina.nl/pintura/' },
+		{ image: 'https://avatars.githubusercontent.com/u/82552321', name: 'Polotno', url: 'https://github.com/polotno-project' },
+		{ image: 'https://avatars.githubusercontent.com/u/489051', name: 'Roman Rädle', url: 'https://github.com/raedle' },
+		{ image: 'https://avatars.githubusercontent.com/u/197597', name: 'Christopher Chedeau', url: 'https://github.com/vjeux' },
 		{ image: 'https://avatars.githubusercontent.com/u/5913254', name: 'Brandon McConnell', url: 'https://github.com/brandonmcconnell' },
 		{ image: 'https://avatars.githubusercontent.com/u/9549394', name: 'studnitz', url: 'https://github.com/studnitz' },
+		{ image: 'https://avatars.githubusercontent.com/u/4714175', name: 'Phoomparin Mano', url: 'https://github.com/heypoom' },
 		{ image: 'https://avatars.githubusercontent.com/u/504909', name: 'Hirbod', url: 'https://github.com/hirbod' },
 		{ image: 'https://avatars.githubusercontent.com/u/2698271', name: 'Matthew Gardner', url: 'https://github.com/spheric' },
+		{ image: 'https://avatars.githubusercontent.com/u/5475819', name: 'AJ Funk', url: 'https://github.com/AJFunk' },
 		{ image: 'https://avatars.githubusercontent.com/u/30229596', name: 'Pablo Bonilla', url: 'https://github.com/devPablo' },
+		{ image: 'https://avatars.githubusercontent.com/u/139718', name: 'Anton Kosiakin', url: 'https://github.com/deil' },
+		{ image: 'https://avatars.githubusercontent.com/u/56988069', name: 'SyhabouthAlex', url: 'https://github.com/SyhabouthAlex' },
 		{ image: 'https://avatars.githubusercontent.com/u/38181164', name: 'wcw', url: 'https://github.com/asd55667' },
 		{ image: 'https://avatars.githubusercontent.com/u/1836701', name: 'Bean Deng', url: 'https://github.com/HADB' },
+		{ image: 'https://avatars.githubusercontent.com/u/255616819', name: 'cronischarles-del', url: 'https://github.com/cronischarles-del' },
+		{ image: 'https://avatars.githubusercontent.com/u/37973863', name: 'Gomi', url: 'https://github.com/gxy5202' },
+		{ image: 'https://avatars.githubusercontent.com/u/36898190', name: 'jepcd', url: 'https://github.com/jepcd' },
 		{ image: 'https://avatars.githubusercontent.com/u/63088713', name: 'taf2000', url: 'https://github.com/taf2000' },
 		{ image: 'https://avatars.githubusercontent.com/u/58149663', name: 'H7GhosT', url: 'https://github.com/H7GhosT' },
 		{ image: 'https://avatars.githubusercontent.com/u/91711202', name: 'ihasq', url: 'https://github.com/ihasq' },
@@ -116,6 +133,8 @@ const sponsors = {
 		{ image: 'https://avatars.githubusercontent.com/u/97225946', name: '808vita', url: 'https://github.com/808vita' },
 		{ image: 'https://avatars.githubusercontent.com/u/3709646', name: 'Rodrigo Belfiore', url: 'https://github.com/roprgm' },
 		{ image: 'https://avatars.githubusercontent.com/u/31102694', name: 'Aiden Liu', url: 'https://github.com/aidenlx' },
+		{ image: 'https://avatars.githubusercontent.com/u/41021374', name: 'arthco', url: 'https://github.com/arthtyagi' },
+		{ image: 'https://avatars.githubusercontent.com/u/5907357', name: 'Harvey Zhao', url: 'https://github.com/zhw2590582' },
 	],
 };
 </script>
@@ -343,10 +362,19 @@ await conversion.execute();
 	</h1>
 	<p class="max-w-2xl">Mediabunny is an open-source project released under the <a href="https://choosealicense.com/licenses/mpl-2.0/" target="_blank">MPL-2.0</a> and is therefore free to use for any purpose, including closed-source commercial use. A permissive license is essential for a foundational library like this to truly thrive. That said, this project requires an immense amount of work and care. This is made possible by the generous financial backing of these awesome sponsors:</p>
 	<template v-if="sponsors.gold.length > 0">
-		<h3 class="!text-2xl">Gold sponsors</h3>
+		<h3 class="!text-3xl">Gold sponsors</h3>
 		<div class="flex flex-wrap mt-1 justify-center gap-1">
-			<a v-for="sponsor in sponsors.gold" :href="sponsor.url" target="_blank" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+			<a v-for="sponsor in sponsors.gold" :href="sponsor.url" target="_blank" rel="sponsored" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
 				<img :src="sponsor.image" class="size-16 rounded-full">
+				<p class="!my-0 !font-medium px-3 text-lg">{{ sponsor.name }}</p>
+			</a>
+		</div>
+	</template>
+	<template v-if="sponsors.silver.length > 0">
+		<h3 class="!text-2xl">Silver sponsors</h3>
+		<div class="flex flex-wrap mt-1 justify-center gap-1">
+			<a v-for="sponsor in sponsors.silver" :href="sponsor.url" target="_blank" rel="sponsored" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+				<img :src="sponsor.image" class="size-13 rounded-full">
 				<p class="!my-0 !font-medium px-3">{{ sponsor.name }}</p>
 			</a>
 		</div>
@@ -354,7 +382,7 @@ await conversion.execute();
 	<template v-if="sponsors.bronze.length > 0">
 		<h3 class="!text-xl">Bronze sponsors</h3>
 		<div class="flex flex-wrap mt-1 justify-center gap-1">
-			<a v-for="sponsor in sponsors.bronze" :href="sponsor.url" target="_blank" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+			<a v-for="sponsor in sponsors.bronze" :href="sponsor.url" target="_blank" rel="sponsored" class="flex items-center p-2 rounded-full hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
 				<img :src="sponsor.image" class="size-10 rounded-full">
 				<p class="!my-0 !font-medium px-3 text-sm">{{ sponsor.name }}</p>
 			</a>
@@ -363,7 +391,7 @@ await conversion.execute();
 	<template v-if="sponsors.individual.length > 0">
 		<h4 class="!text-base">Individual sponsors</h4>
 		<div class="flex flex-wrap mt-1 justify-center">
-			<a v-for="sponsor in sponsors.individual" :href="sponsor.url" target="_blank" class="flex gap-1 w-24 flex-col items-center p-2 rounded-xl hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
+			<a v-for="sponsor in sponsors.individual" :href="sponsor.url" target="_blank" rel="sponsored" class="flex gap-1 w-24 flex-col items-center p-2 rounded-xl hover:bg-(--vp-c-gray-3) !text-(--vp-c-text-1) !no-underline">
 				<img :src="sponsor.image" class="size-8 rounded-full">
 				<p class="!my-0 !font-medium text-xs !leading-4 text-center">{{ sponsor.name }}</p>
 			</a>

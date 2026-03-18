@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -26,6 +26,7 @@ import { Mp3Muxer } from './mp3/mp3-muxer';
 import { Muxer } from './muxer';
 import { OggMuxer } from './ogg/ogg-muxer';
 import { Output, TrackType } from './output';
+import { MpegTsMuxer } from './mpeg-ts/mpeg-ts-muxer';
 import { WaveMuxer } from './wave/wave-muxer';
 
 /**
@@ -73,6 +74,13 @@ export abstract class OutputFormat {
 	abstract getSupportedTrackCounts(): TrackCountLimits;
 	/** Whether this output format supports video rotation metadata. */
 	abstract get supportsVideoRotationMetadata(): boolean;
+	/**
+	 * Whether this output format's tracks store timestamped media data. When `true`, the timestamps of added packets
+	 * will be respected, allowing things like gaps in media data or non-zero start times. When `false`, the format's
+	 * media data implicitly starts at zero and follows an implicit sequential timing from there, using the intrinsic
+	 * durations of the media data.
+	 */
+	abstract get supportsTimestampedMediaData(): boolean;
 
 	/** Returns a list of video codecs that this output format can contain. */
 	getSupportedVideoCodecs() {
@@ -243,15 +251,21 @@ export abstract class IsobmffOutputFormat extends OutputFormat {
 	}
 
 	getSupportedTrackCounts(): TrackCountLimits {
+		const max = 2 ** 32 - 1; // Have fun reaching this one
+
 		return {
-			video: { min: 0, max: Infinity },
-			audio: { min: 0, max: Infinity },
-			subtitle: { min: 0, max: Infinity },
-			total: { min: 1, max: 2 ** 32 - 1 }, // Have fun reaching this one
+			video: { min: 0, max },
+			audio: { min: 0, max },
+			subtitle: { min: 0, max },
+			total: { min: 1, max },
 		};
 	}
 
 	get supportsVideoRotationMetadata() {
+		return true;
+	}
+
+	get supportsTimestampedMediaData() {
 		return true;
 	}
 
@@ -289,7 +303,8 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 		return [
 			...VIDEO_CODECS,
 			...NON_PCM_AUDIO_CODECS,
-			// These are supported via ISO/IEC 23003-5
+
+			// These are supported via ISO/IEC 23003-5:
 			'pcm-s16',
 			'pcm-s16be',
 			'pcm-s24',
@@ -300,6 +315,7 @@ export class Mp4OutputFormat extends IsobmffOutputFormat {
 			'pcm-f32be',
 			'pcm-f64',
 			'pcm-f64be',
+
 			...SUBTITLE_CODECS,
 		];
 	}
@@ -454,11 +470,13 @@ export class MkvOutputFormat extends OutputFormat {
 	}
 
 	getSupportedTrackCounts(): TrackCountLimits {
+		const max = 127;
+
 		return {
-			video: { min: 0, max: Infinity },
-			audio: { min: 0, max: Infinity },
-			subtitle: { min: 0, max: Infinity },
-			total: { min: 1, max: 127 },
+			video: { min: 0, max },
+			audio: { min: 0, max },
+			subtitle: { min: 0, max },
+			total: { min: 1, max },
 		};
 	}
 
@@ -482,6 +500,10 @@ export class MkvOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		// While it technically does support it with ProjectionPoseRoll, many players appear to ignore this value
 		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 }
 
@@ -619,6 +641,10 @@ export class Mp3OutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -717,6 +743,10 @@ export class WavOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -725,6 +755,12 @@ export class WavOutputFormat extends OutputFormat {
  * @public
  */
 export type OggOutputFormatOptions = {
+	/**
+	 * The maximum duration of each Ogg page, in seconds. This is useful for streaming contexts where more frequent page
+	 * output is desired. By default, pages are only flushed when they exceed a certain size.
+	 */
+	maximumPageDuration?: number;
+
 	/**
 	 * Will be called for each Ogg page that is written.
 	 *
@@ -749,6 +785,12 @@ export class OggOutputFormat extends OutputFormat {
 		if (!options || typeof options !== 'object') {
 			throw new TypeError('options must be an object.');
 		}
+		if (
+			options.maximumPageDuration !== undefined
+			&& (!Number.isFinite(options.maximumPageDuration) || options.maximumPageDuration <= 0)
+		) {
+			throw new TypeError('options.maximumPageDuration, when provided, must be a positive number.');
+		}
 		if (options.onPage !== undefined && typeof options.onPage !== 'function') {
 			throw new TypeError('options.onPage, when provided, must be a function.');
 		}
@@ -769,11 +811,13 @@ export class OggOutputFormat extends OutputFormat {
 	}
 
 	getSupportedTrackCounts(): TrackCountLimits {
+		const max = 2 ** 32; // Have fun reaching this one
+
 		return {
 			video: { min: 0, max: 0 },
-			audio: { min: 0, max: Infinity },
+			audio: { min: 0, max },
 			subtitle: { min: 0, max: 0 },
-			total: { min: 1, max: 2 ** 32 },
+			total: { min: 1, max },
 		};
 	}
 
@@ -792,6 +836,10 @@ export class OggOutputFormat extends OutputFormat {
 	}
 
 	get supportsVideoRotationMetadata() {
+		return false;
+	}
+
+	get supportsTimestampedMediaData() {
 		return false;
 	}
 }
@@ -868,6 +916,10 @@ export class AdtsOutputFormat extends OutputFormat {
 	get supportsVideoRotationMetadata() {
 		return false;
 	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
 }
 
 /**
@@ -938,5 +990,94 @@ export class FlacOutputFormat extends OutputFormat {
 
 	get supportsVideoRotationMetadata() {
 		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return false;
+	}
+}
+
+/**
+ * MPEG-TS-specific output options.
+ * @group Output formats
+ * @public
+ */
+export type MpegTsOutputFormatOptions = {
+	/**
+	 * Will be called for each 188-byte Transport Stream packet that is written.
+	 *
+	 * @param data - The raw bytes.
+	 * @param position - The byte offset of the data in the file.
+	 */
+	onPacket?: (data: Uint8Array, position: number) => unknown;
+};
+
+/**
+ * MPEG Transport Stream file format.
+ * @group Output formats
+ * @public
+ */
+export class MpegTsOutputFormat extends OutputFormat {
+	/** @internal */
+	_options: MpegTsOutputFormatOptions;
+
+	/** Creates a new {@link MpegTsOutputFormat} configured with the specified `options`. */
+	constructor(options: MpegTsOutputFormatOptions = {}) {
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+		if (options.onPacket !== undefined && typeof options.onPacket !== 'function') {
+			throw new TypeError('options.onPacket, when provided, must be a function.');
+		}
+
+		super();
+
+		this._options = options;
+	}
+
+	/** @internal */
+	_createMuxer(output: Output) {
+		return new MpegTsMuxer(output, this);
+	}
+
+	/** @internal */
+	get _name() {
+		return 'MPEG-TS';
+	}
+
+	getSupportedTrackCounts(): TrackCountLimits {
+		const maxVideo = 16; // Stream IDs 0xE0-0xEF
+		const maxAudio = 32;
+		const maxTotal = maxVideo + maxAudio;
+
+		return {
+			video: { min: 0, max: maxVideo },
+			audio: { min: 0, max: maxAudio },
+			subtitle: { min: 0, max: 0 },
+			total: { min: 1, max: maxTotal },
+		};
+	}
+
+	get fileExtension() {
+		return '.ts';
+	}
+
+	get mimeType() {
+		return 'video/MP2T';
+	}
+
+	getSupportedCodecs(): MediaCodec[] {
+		return [
+			...VIDEO_CODECS.filter(codec => ['avc', 'hevc'].includes(codec)),
+			...AUDIO_CODECS.filter(codec => ['aac', 'mp3', 'ac3', 'eac3'].includes(codec)),
+		];
+	}
+
+	get supportsVideoRotationMetadata() {
+		return false;
+	}
+
+	get supportsTimestampedMediaData() {
+		return true;
 	}
 }

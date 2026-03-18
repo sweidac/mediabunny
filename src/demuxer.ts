@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,7 +8,7 @@
 
 import { Input } from './input';
 import { InputTrack } from './input-track';
-import { MetadataTags } from './tags';
+import { MetadataTags } from './metadata';
 
 export abstract class Demuxer {
 	input: Input;

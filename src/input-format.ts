@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -21,15 +21,17 @@ import {
 } from './matroska/ebml';
 import { MatroskaDemuxer } from './matroska/matroska-demuxer';
 import { Mp3Demuxer } from './mp3/mp3-demuxer';
-import { FRAME_HEADER_SIZE } from '../shared/mp3-misc';
+import { FRAME_HEADER_SIZE, getXingOffset, INFO, XING } from '../shared/mp3-misc';
 import { ID3_V2_HEADER_SIZE, readId3V2Header } from './id3';
-import { readNextFrameHeader } from './mp3/mp3-reader';
+import { readNextMp3FrameHeader } from './mp3/mp3-reader';
 import { OggDemuxer } from './ogg/ogg-demuxer';
 import { WaveDemuxer } from './wave/wave-demuxer';
-import { MAX_FRAME_HEADER_SIZE, MIN_FRAME_HEADER_SIZE, readFrameHeader } from './adts/adts-reader';
+import { MAX_ADTS_FRAME_HEADER_SIZE, MIN_ADTS_FRAME_HEADER_SIZE, readAdtsFrameHeader } from './adts/adts-reader';
 import { AdtsDemuxer } from './adts/adts-demuxer';
-import { readAscii } from './reader';
+import { readAscii, readBytes, readU32Be } from './reader';
 import { FlacDemuxer } from './flac/flac-demuxer';
+import { MpegTsDemuxer } from './mpeg-ts/mpeg-ts-demuxer';
+import { TS_PACKET_SIZE } from './mpeg-ts/mpeg-ts-misc';
 
 /**
  * Base class representing an input media file format.
@@ -155,7 +157,7 @@ export class MatroskaInputFormat extends InputFormat {
 		}
 
 		const dataSize = readElementSize(headerSlice);
-		if (dataSize === null) {
+		if (typeof dataSize !== 'number') {
 			return false; // Miss me with that shit
 		}
 
@@ -171,7 +173,7 @@ export class MatroskaInputFormat extends InputFormat {
 
 			const { id, size } = header;
 			const dataStartPos = dataSlice.filePos;
-			if (size === null) return false;
+			if (size === undefined) return false;
 
 			switch (id) {
 				case EBMLId.EBMLVersion: {
@@ -259,12 +261,7 @@ export class WebMInputFormat extends MatroskaInputFormat {
 export class Mp3InputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		let slice = input._reader.requestSlice(0, 10);
-		if (slice instanceof Promise) slice = await slice;
-		if (!slice) return false;
-
 		let currentPos = 0;
-		let id3V2HeaderFound = false;
 
 		while (true) {
 			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
@@ -276,17 +273,26 @@ export class Mp3InputFormat extends InputFormat {
 				break;
 			}
 
-			id3V2HeaderFound = true;
 			currentPos = slice.filePos + id3V2Header.size;
 		}
 
-		const firstResult = await readNextFrameHeader(input._reader, currentPos, currentPos + 4096);
+		const firstResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + 4096);
 		if (!firstResult) {
 			return false;
 		}
 
-		if (id3V2HeaderFound) {
-			// If there was an ID3v2 tag at the start, we can be pretty sure this is MP3 by now
+		const firstHeader = firstResult.header;
+		const xingOffset = getXingOffset(firstHeader.mpegVersionId, firstHeader.channel);
+
+		let slice = input._reader.requestSlice(firstResult.startPos + xingOffset, 4);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		const word = readU32Be(slice);
+		const isXing = word === XING || word === INFO;
+
+		if (isXing) {
+			// Gotta be MP3
 			return true;
 		}
 
@@ -294,12 +300,11 @@ export class Mp3InputFormat extends InputFormat {
 
 		// Fine, we found one frame header, but we're still not entirely sure this is MP3. Let's check if we can find
 		// another header right after it:
-		const secondResult = await readNextFrameHeader(input._reader, currentPos, currentPos + FRAME_HEADER_SIZE);
+		const secondResult = await readNextMp3FrameHeader(input._reader, currentPos, currentPos + FRAME_HEADER_SIZE);
 		if (!secondResult) {
 			return false;
 		}
 
-		const firstHeader = firstResult.header;
 		const secondHeader = secondResult.header;
 
 		// In a well-formed MP3 file, we'd expect these two frames to share some similarities:
@@ -439,20 +444,45 @@ export class FlacInputFormat extends InputFormat {
 export class AdtsInputFormat extends InputFormat {
 	/** @internal */
 	async _canReadInput(input: Input) {
-		let slice = input._reader.requestSliceRange(0, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE);
+		let currentPos = 0;
+
+		while (true) {
+			let slice = input._reader.requestSlice(currentPos, ID3_V2_HEADER_SIZE);
+			if (slice instanceof Promise) slice = await slice;
+			if (!slice) break;
+
+			const id3V2Header = readId3V2Header(slice);
+			if (!id3V2Header) {
+				break;
+			}
+
+			currentPos = slice.filePos + id3V2Header.size;
+		}
+
+		let slice = input._reader.requestSliceRange(
+			currentPos,
+			MIN_ADTS_FRAME_HEADER_SIZE,
+			MAX_ADTS_FRAME_HEADER_SIZE,
+		);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 
-		const firstHeader = readFrameHeader(slice);
+		const firstHeader = readAdtsFrameHeader(slice);
 		if (!firstHeader) {
 			return false;
 		}
 
-		slice = input._reader.requestSliceRange(firstHeader.frameLength, MIN_FRAME_HEADER_SIZE, MAX_FRAME_HEADER_SIZE);
+		currentPos += firstHeader.frameLength;
+
+		slice = input._reader.requestSliceRange(
+			currentPos,
+			MIN_ADTS_FRAME_HEADER_SIZE,
+			MAX_ADTS_FRAME_HEADER_SIZE,
+		);
 		if (slice instanceof Promise) slice = await slice;
 		if (!slice) return false;
 
-		const secondHeader = readFrameHeader(slice);
+		const secondHeader = readAdtsFrameHeader(slice);
 		if (!secondHeader) {
 			return false;
 		}
@@ -477,60 +507,113 @@ export class AdtsInputFormat extends InputFormat {
 }
 
 /**
+ * MPEG Transport Stream (MPEG-TS) file format.
+ *
+ * Do not instantiate this class; use the {@link MPEG_TS} singleton instead.
+ *
+ * @group Input formats
+ * @public
+ */
+export class MpegTsInputFormat extends InputFormat {
+	/** @internal */
+	async _canReadInput(input: Input) {
+		const lengthToCheck = TS_PACKET_SIZE + 16 + 1;
+		let slice = input._reader.requestSlice(0, lengthToCheck);
+		if (slice instanceof Promise) slice = await slice;
+		if (!slice) return false;
+
+		const bytes = readBytes(slice, lengthToCheck);
+
+		if (bytes[0] === 0x47 && bytes[TS_PACKET_SIZE] === 0x47) {
+			// Regular MPEG-TS
+			return true;
+		} else if (bytes[0] === 0x47 && bytes[TS_PACKET_SIZE + 16] === 0x47) {
+			// MPEG-TS with Forward Error Correction
+			return true;
+		} else if (bytes[4] === 0x47 && bytes[4 + TS_PACKET_SIZE + 4] === 0x47) {
+			// MPEG-2-TS (DVHS)
+			return true;
+		}
+
+		return false;
+	}
+
+	/** @internal */
+	_createDemuxer(input: Input) {
+		return new MpegTsDemuxer(input);
+	}
+
+	get name() {
+		return 'MPEG Transport Stream';
+	}
+
+	get mimeType() {
+		return 'video/MP2T';
+	}
+}
+
+/**
  * MP4 input format singleton.
  * @group Input formats
  * @public
  */
-export const MP4 = new Mp4InputFormat();
+export const MP4 = /* #__PURE__ */ new Mp4InputFormat();
 /**
  * QuickTime File Format input format singleton.
  * @group Input formats
  * @public
  */
-export const QTFF = new QuickTimeInputFormat();
+export const QTFF = /* #__PURE__ */ new QuickTimeInputFormat();
 /**
  * Matroska input format singleton.
  * @group Input formats
  * @public
  */
-export const MATROSKA = new MatroskaInputFormat();
+export const MATROSKA = /* #__PURE__ */ new MatroskaInputFormat();
 /**
  * WebM input format singleton.
  * @group Input formats
  * @public
  */
-export const WEBM = new WebMInputFormat();
+export const WEBM = /* #__PURE__ */ new WebMInputFormat();
 /**
  * MP3 input format singleton.
  * @group Input formats
  * @public
  */
-export const MP3 = new Mp3InputFormat();
+export const MP3 = /* #__PURE__ */ new Mp3InputFormat();
 /**
  * WAVE input format singleton.
  * @group Input formats
  * @public
  */
-export const WAVE = new WaveInputFormat();
+export const WAVE = /* #__PURE__ */ new WaveInputFormat();
 /**
  * Ogg input format singleton.
  * @group Input formats
  * @public
  */
-export const OGG = new OggInputFormat();
+export const OGG = /* #__PURE__ */ new OggInputFormat();
 /**
  * ADTS input format singleton.
  * @group Input formats
  * @public
  */
-export const ADTS = new AdtsInputFormat();
+export const ADTS = /* #__PURE__ */ new AdtsInputFormat();
 
 /**
  * FLAC input format singleton.
  * @group Input formats
  * @public
  */
-export const FLAC = new FlacInputFormat();
+export const FLAC = /* #__PURE__ */ new FlacInputFormat();
+
+/**
+ * MPEG-TS input format singleton.
+ * @group Input formats
+ * @public
+ */
+export const MPEG_TS = /* #__PURE__ */ new MpegTsInputFormat();
 
 /**
  * List of all input format singletons. If you don't need to support all input formats, you should specify the
@@ -538,4 +621,4 @@ export const FLAC = new FlacInputFormat();
  * @group Input formats
  * @public
  */
-export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS];
+export const ALL_FORMATS: InputFormat[] = [MP4, QTFF, MATROSKA, WEBM, WAVE, OGG, FLAC, MP3, ADTS, MPEG_TS];

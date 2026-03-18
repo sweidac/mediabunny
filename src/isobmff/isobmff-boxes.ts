@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -43,8 +43,9 @@ import {
 	IsobmffVideoTrackData,
 	Sample,
 } from './isobmff-muxer';
-import { parseOpusIdentificationHeader } from '../codec-data';
-import { MetadataTags, RichImageData } from '../tags';
+import { parseAc3SyncFrame, parseEac3SyncFrame, parseOpusIdentificationHeader } from '../codec-data';
+import { MetadataTags, RichImageData } from '../metadata';
+import { Bitstream } from '../../shared/bitstream';
 
 export class IsobmffBoxWriter {
 	private helper = new Uint8Array(8);
@@ -135,8 +136,8 @@ export class IsobmffBoxWriter {
 	}
 }
 
-const bytes = new Uint8Array(8);
-const view = new DataView(bytes.buffer);
+const bytes = /* #__PURE__ */ new Uint8Array(8);
+const view = /* #__PURE__ */ new DataView(bytes.buffer);
 
 const u8 = (value: number) => {
 	return [(value % 0x100 + 0x100) % 0x100];
@@ -243,7 +244,7 @@ const rotationMatrix = (rotationInDegrees: number): TransformationMatrix => {
 		0, 0, 1,
 	];
 };
-const IDENTITY_MATRIX = rotationMatrix(0);
+const IDENTITY_MATRIX = /* #__PURE__ */ rotationMatrix(0);
 
 const matrixToBytes = (matrix: TransformationMatrix) => {
 	return [
@@ -421,7 +422,12 @@ export const tkhd = (
 		matrix = IDENTITY_MATRIX;
 	}
 
-	return fullBox('tkhd', +needsU64, 3, [
+	let flags = 0x2; // Track in movie
+	if (trackData.track.metadata.disposition?.default !== false) {
+		flags |= 0x1; // Track enabled
+	}
+
+	return fullBox('tkhd', +needsU64, flags, [
 		u32OrU64(creationTime), // Creation time
 		u32OrU64(creationTime), // Modification time
 		u32(trackData.track.id), // Track ID
@@ -577,7 +583,7 @@ export const stsd = (trackData: IsobmffTrackData) => {
 
 	if (trackData.type === 'video') {
 		sampleDescription = videoSampleDescription(
-			VIDEO_CODEC_TO_BOX_NAME[trackData.track.source._codec],
+			videoCodecToBoxName(trackData.track.source._codec, trackData.info.decoderConfig.codec),
 			trackData,
 		);
 	} else if (trackData.type === 'audio') {
@@ -625,8 +631,21 @@ export const videoSampleDescription = (
 	i16(0xffff), // Pre-defined
 ], [
 	VIDEO_CODEC_TO_CONFIGURATION_BOX[trackData.track.source._codec](trackData),
+	pasp(trackData),
 	colorSpaceIsComplete(trackData.info.decoderConfig.colorSpace) ? colr(trackData) : null,
 ]);
+
+/** Pixel Aspect Ratio Box: Specifies pixel width:height spacing for non-square pixels. */
+export const pasp = (trackData: IsobmffVideoTrackData) => {
+	if (trackData.info.pixelAspectRatio.num === trackData.info.pixelAspectRatio.den) {
+		return null;
+	}
+
+	return box('pasp', [
+		u32(trackData.info.pixelAspectRatio.num),
+		u32(trackData.info.pixelAspectRatio.den),
+	]);
+};
 
 /** Colour Information Box: Specifies the color space of the video. */
 export const colr = (trackData: IsobmffVideoTrackData) => box('colr', [
@@ -707,9 +726,10 @@ export const soundSampleDescription = (
 ) => {
 	let version = 0;
 	let contents: NestedNumberArray;
-
 	let sampleSizeInBits = 16;
-	if ((PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(trackData.track.source._codec)) {
+
+	const isPcmCodec = (PCM_AUDIO_CODECS as readonly AudioCodec[]).includes(trackData.track.source._codec);
+	if (isPcmCodec) {
 		const codec = trackData.track.source._codec as PcmAudioCodec;
 		const { sampleSize } = parsePcmCodec(codec);
 		sampleSizeInBits = 8 * sampleSize;
@@ -717,6 +737,10 @@ export const soundSampleDescription = (
 		if (sampleSizeInBits > 16) {
 			version = 1;
 		}
+	}
+
+	if (trackData.muxer.isQuickTime) {
+		version = 1;
 	}
 
 	if (version === 0) {
@@ -734,6 +758,8 @@ export const soundSampleDescription = (
 			u16(0), // Sample rate (lower)
 		];
 	} else {
+		const compressionId = isPcmCodec ? 0 : -2;
+
 		contents = [
 			Array(6).fill(0), // Reserved
 			u16(1), // Data reference index
@@ -742,13 +768,21 @@ export const soundSampleDescription = (
 			u32(0), // Vendor
 			u16(trackData.info.numberOfChannels), // Number of channels
 			u16(Math.min(sampleSizeInBits, 16)), // Sample size (bits)
-			u16(0), // Compression ID
+			i16(compressionId), // Compression ID
 			u16(0), // Packet size
 			u16(trackData.info.sampleRate < 2 ** 16 ? trackData.info.sampleRate : 0), // Sample rate (upper)
 			u16(0), // Sample rate (lower)
-			u32(1), // Samples per packet (must be 1 for uncompressed formats)
-			u32(sampleSizeInBits / 8), // Bytes per packet
-			u32(trackData.info.numberOfChannels * sampleSizeInBits / 8), // Bytes per frame
+			isPcmCodec
+				? [
+						u32(1), // Samples per packet (must be 1 for uncompressed formats)
+						u32(sampleSizeInBits / 8), // Bytes per packet
+						u32(trackData.info.numberOfChannels * sampleSizeInBits / 8), // Bytes per frame
+					]
+				: [
+						u32(0), // Samples per packet (don't bother, still works with 0)
+						u32(0), // Bytes per packet (variable)
+						u32(0), // Bytes per frame (variable)
+					],
 			u32(2), // Bytes per sample (constant in FFmpeg)
 		];
 	}
@@ -845,7 +879,7 @@ export const dOps = (trackData: IsobmffAudioTrackData) => {
 	let inputSampleRate = trackData.info.sampleRate;
 	let outputGain = 0;
 	let channelMappingFamily = 0;
-	let channelMappingTable = new Uint8Array(0);
+	let channelMappingTable: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
 
 	// Read preskip and from codec private data from the encoder
 	// https://www.rfc-editor.org/rfc/rfc7845#section-5
@@ -900,6 +934,79 @@ const pcmC = (trackData: IsobmffAudioTrackData) => {
 		u8(formatFlags),
 		u8(8 * sampleSize),
 	]);
+};
+
+/** AC3SpecificBox */
+const dac3 = (trackData: IsobmffAudioTrackData) => {
+	const frameInfo = parseAc3SyncFrame(trackData.info.firstPacket.data);
+	if (!frameInfo) {
+		throw new Error(
+			'Couldn\'t extract AC-3 frame info from the audio packet. '
+			+ 'Ensure the packets contain valid AC-3 sync frames (as specified in ETSI TS 102 366).',
+		);
+	}
+
+	const bytes = new Uint8Array(3);
+	const bitstream = new Bitstream(bytes);
+
+	bitstream.writeBits(2, frameInfo.fscod);
+	bitstream.writeBits(5, frameInfo.bsid);
+	bitstream.writeBits(3, frameInfo.bsmod);
+	bitstream.writeBits(3, frameInfo.acmod);
+	bitstream.writeBits(1, frameInfo.lfeon);
+	bitstream.writeBits(5, frameInfo.bitRateCode);
+	bitstream.writeBits(5, 0); // reserved
+
+	return box('dac3', [...bytes]);
+};
+
+/** EC3SpecificBox */
+const dec3 = (trackData: IsobmffAudioTrackData) => {
+	const frameInfo = parseEac3SyncFrame(trackData.info.firstPacket.data);
+	if (!frameInfo) {
+		throw new Error(
+			'Couldn\'t extract E-AC-3 frame info from the audio packet. '
+			+ 'Ensure the packets contain valid E-AC-3 sync frames (as specified in ETSI TS 102 366).',
+		);
+	}
+
+	// Calculate size
+	let totalBits = 16; // header: data_rate (13) + num_ind_sub (3)
+	for (const sub of frameInfo.substreams) {
+		totalBits += 23; // fixed fields per substream
+		if (sub.numDepSub > 0) {
+			totalBits += 9; // chan_loc
+		} else {
+			totalBits += 1; // reserved
+		}
+	}
+	const size = Math.ceil(totalBits / 8);
+
+	const bytes = new Uint8Array(size);
+	const bitstream = new Bitstream(bytes);
+
+	bitstream.writeBits(13, frameInfo.dataRate);
+	bitstream.writeBits(3, frameInfo.substreams.length - 1); // num_ind_sub
+
+	for (const sub of frameInfo.substreams) {
+		bitstream.writeBits(2, sub.fscod);
+		bitstream.writeBits(5, sub.bsid);
+		bitstream.writeBits(1, 0); // reserved
+		bitstream.writeBits(1, 0); // asvc = 0
+		bitstream.writeBits(3, sub.bsmod);
+		bitstream.writeBits(3, sub.acmod);
+		bitstream.writeBits(1, sub.lfeon);
+		bitstream.writeBits(3, 0); // reserved
+		bitstream.writeBits(4, sub.numDepSub);
+
+		if (sub.numDepSub > 0) {
+			bitstream.writeBits(9, sub.chanLoc);
+		} else {
+			bitstream.writeBits(1, 0); // reserved
+		}
+	}
+
+	return box('dec3', [...bytes]);
 };
 
 export const subtitleSampleDescription = (
@@ -1572,12 +1679,14 @@ const dataStringBoxLong = (value: string) => {
 	]);
 };
 
-const VIDEO_CODEC_TO_BOX_NAME: Record<VideoCodec, string> = {
-	avc: 'avc1',
-	hevc: 'hvc1',
-	vp8: 'vp08',
-	vp9: 'vp09',
-	av1: 'av01',
+const videoCodecToBoxName = (codec: VideoCodec, fullCodecString: string) => {
+	switch (codec) {
+		case 'avc': return fullCodecString.startsWith('avc3') ? 'avc3' : 'avc1';
+		case 'hevc': return 'hvc1';
+		case 'vp8': return 'vp08';
+		case 'vp9': return 'vp09';
+		case 'av1': return 'av01';
+	}
 };
 
 const VIDEO_CODEC_TO_CONFIGURATION_BOX: Record<VideoCodec, (trackData: IsobmffVideoTrackData) => Box | null> = {
@@ -1599,6 +1708,8 @@ const audioCodecToBoxName = (codec: AudioCodec, isQuickTime: boolean): string =>
 		case 'alaw': return 'alaw';
 		case 'pcm-u8': return 'raw ';
 		case 'pcm-s8': return 'sowt';
+		case 'ac3': return 'ac-3';
+		case 'eac3': return 'ec-3';
 	}
 
 	// Logic diverges here
@@ -1638,6 +1749,8 @@ const audioCodecToConfigurationBox = (codec: AudioCodec, isQuickTime: boolean) =
 		case 'opus': return dOps;
 		case 'vorbis': return esds;
 		case 'flac': return dfLa;
+		case 'ac3': return dac3;
+		case 'eac3': return dec3;
 	}
 
 	// Logic diverges here

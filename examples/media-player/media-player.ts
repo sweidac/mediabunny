@@ -663,7 +663,7 @@ window.addEventListener('resize', () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {
@@ -680,7 +680,7 @@ loadUrlButton.addEventListener('click', () => {
 	const url = prompt(
 		'Please enter a URL of a media file. Note that it must be HTTPS and support cross-origin requests, so have the'
 		+ ' right CORS headers set.',
-		'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+		'https://remotion.media/BigBuckBunny.mp4',
 	);
 	if (!url) {
 		return;

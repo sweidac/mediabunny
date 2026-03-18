@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,7 +7,7 @@
  */
 
 import { AsyncMutex, isIso639Dash2LanguageCode, Rotation } from './misc';
-import { MetadataTags, validateMetadataTags } from './tags';
+import { MetadataTags, TrackDisposition, validateMetadataTags, validateTrackDisposition } from './metadata';
 import { Muxer } from './muxer';
 import { OutputFormat } from './output-format';
 import { AudioSource, MediaSource, SubtitleSource, VideoSource } from './media-source';
@@ -74,6 +74,8 @@ export type BaseTrackMetadata = {
 	languageCode?: string;
 	/** A user-defined name for this track, like "English" or "Director Commentary". */
 	name?: string;
+	/** The track's disposition, i.e. information about its intended usage. */
+	disposition?: Partial<TrackDisposition>;
 	/**
 	 * The maximum amount of encoded packets that will be added to this track. Setting this field provides the muxer
 	 * with an additional signal that it can use to preallocate space in the file.
@@ -128,6 +130,9 @@ const validateBaseTrackMetadata = (metadata: BaseTrackMetadata) => {
 	}
 	if (metadata.name !== undefined && typeof metadata.name !== 'string') {
 		throw new TypeError('metadata.name, when provided, must be a string.');
+	}
+	if (metadata.disposition !== undefined) {
+		validateTrackDisposition(metadata.disposition);
 	}
 	if (
 		metadata.maximumPacketCount !== undefined

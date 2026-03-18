@@ -94,6 +94,8 @@ constructor(
 );
 ```
 
+When creating a packet for a given codec, you *must* adhere to the data format specified in the [Mediabunny Codec Registry](/codec-registry/overview).
+
 ::: info
 You probably won't ever need to set `sequenceNumber` or `byteLength` in the constructor.
 :::
@@ -176,7 +178,7 @@ Negative sequence numbers mean the packet's ordering is undefined. When creating
 
 ### Cloning packets
 
-Use the `clone` method to create a new packet from an existing packet. While doing so, you can change its timestamp and duration.
+Use the `clone` method to create a new packet from an existing packet. While doing so, you can partially change its data.
 ```ts
 // Creates a clone identical to the original:
 packet.clone();
@@ -279,6 +281,10 @@ videoSample.format; // => VideoPixelFormat | null
 videoSample.codedWidth; // => number
 videoSample.codedHeight; // => number
 
+// Pixel aspect ratio-corrected dimensions of the sample
+videoSample.squarePixelWidth;
+videoSample.squarePixelHeight;
+
 // Transformed display dimensions of the sample (after rotation)
 videoSample.displayWidth; // => number	
 videoSample.displayHeight; // => number	
@@ -286,6 +292,9 @@ videoSample.displayHeight; // => number
 // Rotation of the sample in degrees clockwise. The raw sample should be
 // rotated by this amount when it is presented.
 videoSample.rotation; // => 0 | 90 | 180 | 270
+
+// The sample's pixel aspect ratio
+videoSample.pixelAspectRatio; // => { num: number, den: number }
 
 // Timing information
 videoSample.timestamp; // => Presentation timestamp in seconds
@@ -295,6 +304,8 @@ videoSample.microsecondDuration; // => Duration in microseconds
 
 // Color space of the sample
 videoSample.colorSpace; // => VideoColorSpace
+
+videoSample.visibleRect; // Rectangle
 ```
 
 While all of these properties are read-only, you can use the `setTimestamp`, `setDuration` and `setRotation` methods to modify some of the metadata of the video sample.
@@ -378,13 +389,11 @@ const bytesNeeded = videoSample.allocationSize(); // => number
 Then, use `copyTo` to copy the pixel data into the destination buffer:
 ```ts
 const bytes = new Uint8Array(bytesNeeded);
-videoSample.copyTo(bytes);
+const planeLayout = await videoSample.copyTo(bytes);
 ```
 
 ::: info
-The data will always be in the pixel format specified in the `format` field.
-
-To convert the data into a different pixel format, or to extract only a section of the frame, please use the [`allocationSize`](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/allocationSize) and [`copyTo`](https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame/copyTo) methods on `VideoFrame` instead. Get a `VideoFrame` by running `videoSample.toVideoFrame()`.
+You can pass additional options to `allocationSize` and `copyTo` to extract data in a different pixel format.
 :::
 
 ---

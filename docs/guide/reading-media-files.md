@@ -60,6 +60,11 @@ await input.computeDuration(); // => 1905.4615
 ```
 More specifically, the duration is defined as the maximum end timestamp across all tracks.
 
+Since not all media files begin at time zero, you can also retrieve the *starting timestamp* of the media file in seconds:
+```ts
+await input.getFirstTimestamp(); // => 0.0
+```
+
 Mediabunny also lets you read descriptive metadata tags from media files, such as title, artist, or cover art:
 ```ts
 await input.getMetadataTags(); // => MetadataTags
@@ -93,6 +98,10 @@ Once you have an `InputTrack`, you can start extracting metadata from it.
 // Get a unique ID for this track in the input file:
 track.id; // => number
 
+// Get the 1-based index of this track among all tracks of the same type
+// (e.g., first video track is 1, second video track is 2, etc.):
+track.number; // => number
+
 // Check the track's type:
 track.type; // => 'video' | 'audio' | 'subtitle';
 
@@ -106,6 +115,10 @@ track.languageCode; // => string
 
 // A user-defined name for this track.
 track.name; // => string
+
+// Information about the intended usage of the track
+// (default, commentary, hearing-impaired, visually-impaired, etc.)
+track.disposition; // TrackDisposition
 ```
 
 #### Codec information
@@ -116,7 +129,7 @@ track.codec; // => MediaCodec | null
 ```
 This field is `null` when the track's codec couldn't be recognized or is not supported by Mediabunny. See [Codecs](./supported-formats-and-codecs#codecs) for the full list of supported codecs. When Mediabunny doesn't recognize the format, you can still use the `internalCodecId` field to figure out the codec of the track, although its format depends on the container format used and is not homogenized by Mediabunny.
 
-You can also extract the full codec parameter string from the track, as specified in the [WebCodecs Codec Registry](https://www.w3.org/TR/webcodecs-codec-registry/):
+You can also extract the full codec parameter string from the track, as specified in the [Mediabunny Codec Registry](/codec-registry/overview):
 ```ts
 await track.getCodecParameterString(); // => 'avc1.42001f'
 ```
@@ -203,17 +216,26 @@ This will only look at the first ~50 packets and then return the result. This is
 In addition to the [common track metadata](#common-track-metadata), video tracks have additional metadata you can query:
 
 ```ts
-// Get the raw pixel dimensions of the track's coded samples, before rotation:
+// Get the raw pixel dimensions of the track's coded samples:
 videoTrack.codedWidth; // => number
 videoTrack.codedHeight; // => number
 
-// Get the displayed pixel dimensions of the track's samples, after rotation:
+// Get the pixel dimensions of the track after aspect ratio adjustments,
+// but before rotation:
+videoTrack.squarePixelWidth; // => number
+videoTrack.squarePixelHeight; // => number
+
+// Get the displayed pixel dimensions of the track's samples, after
+// aspect ratio adjustments and rotation:
 videoTrack.displayWidth; // => number
 videoTrack.displayHeight; // => number
 
 // Get the clockwise rotation in degrees by which the
 // track's frames should be rotated:
 videoTrack.rotation; // => 0 | 90 | 180 | 270
+
+// Get the aspect ratio of the track's pixels (usually 1:1):
+videoTrack.pixelAspectRatio; // => { num: number, den: number }
 ```
 
 To compute a video track's average frame rate (FPS), use [`computePacketStats`](#packet-statistics):
@@ -487,11 +509,14 @@ If you're using this source in the browser and the URL is on a different origin,
 ```ts
 type UrlSourceOptions = {
 	requestInit?: RequestInit;
-	getRetryDelay?: (previousAttempts: number) => number | null;
+	getRetryDelay?: (previousAttempts: number, error: unknown, url: string | URL | Request) => number | null;
 
 	// The maximum number of bytes the cache is allowed to hold
 	// in memory. Defaults to 8 MiB.
 	maxCacheSize?: number;
+
+	// The maximum number of parallel requests to use for fetching. Defaults to 2.
+	parallelism?: number;
 
 	// Used to provide a custom fetch function
 	fetchFn?: typeof fetch;
@@ -517,7 +542,9 @@ const source = new UrlSource('https://example.com/bigbuckbunny.mp4', {
 });
 ```
 
-Not setting `getRetryDelay` will default to an infinite, capped exponential backoff pattern.
+Not setting `getRetryDelay` will lead to the default being used:
+- Infinite exponential backoff pattern, capped at 16 seconds.  
+- If a CORS error is suspected (`fetch()` did reject even though `navigator.onLine` is true and origin is different), no further retries will be made.
 
 ---
 

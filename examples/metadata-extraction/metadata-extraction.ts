@@ -43,18 +43,23 @@ const extractMetadata = (resource: File | string) => {
 	const object = {
 		'Format': input.getFormat().then(format => format.name),
 		'Full MIME type': input.getMimeType(),
-		'Duration': input.computeDuration().then(duration => `${duration} seconds`),
+		'Starts at': input.getFirstTimestamp().then(start => `${start} seconds`),
+		'Ends at': input.computeDuration().then(duration => `${duration} seconds`),
 		'Tracks': input.getTracks().then(tracks => tracks.map(track => ({
 			'Type': track.type,
 			'Codec': track.codec,
 			'Full codec string': track.getCodecParameterString(),
-			'Duration': track.computeDuration().then(duration => `${duration} seconds`),
+			'Starts at': track.getFirstTimestamp().then(start => `${start} seconds`),
+			'Ends at': track.computeDuration().then(duration => `${duration} seconds`),
 			'Language code': track.languageCode,
 			...(track.isVideoTrack()
 				? {
 						'Coded width': `${track.codedWidth} pixels`,
 						'Coded height': `${track.codedHeight} pixels`,
 						'Rotation': `${track.rotation}° clockwise`,
+						'Pixel aspect ratio': `${track.pixelAspectRatio.num}:${track.pixelAspectRatio.den}`,
+						'Display width': `${track.displayWidth} pixels`,
+						'Display height': `${track.displayHeight} pixels`,
 						'Transparency': track.canBeTransparent(),
 					}
 				: track.isAudioTrack()
@@ -97,7 +102,7 @@ const extractMetadata = (resource: File | string) => {
 				'Lyrics': tags.lyrics,
 				'Comment': tags.comment,
 				'Images': tags.images?.map((image) => {
-					const blob = new Blob([image.data], { type: image.mimeType });
+					const blob = new Blob([image.data.slice()], { type: image.mimeType });
 					const element = new Image();
 					element.src = URL.createObjectURL(blob);
 
@@ -202,7 +207,7 @@ const shortDelay = () => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {
@@ -219,7 +224,7 @@ loadUrlButton.addEventListener('click', () => {
 	const url = prompt(
 		'Please enter a URL of a media file. Note that it must be HTTPS and support cross-origin requests, so have the'
 		+ ' right CORS headers set.',
-		'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+		'https://remotion.media/BigBuckBunny.mp4',
 	);
 	if (!url) {
 		return;

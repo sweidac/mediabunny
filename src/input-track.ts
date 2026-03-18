@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,9 +11,10 @@ import { determineVideoPacketType } from './codec-data';
 import { customAudioDecoders, customVideoDecoders } from './custom-coder';
 import { Input } from './input';
 import { EncodedPacketSink, PacketRetrievalOptions } from './media-sink';
-import { assert, Rotation } from './misc';
+import { assert, Rational, Rotation, simplifyRational } from './misc';
 import { TrackType } from './output';
 import { EncodedPacket, PacketType } from './packet';
+import { TrackDisposition } from './metadata';
 
 /**
  * Contains aggregate statistics about the encoded packets of a track.
@@ -31,11 +32,13 @@ export type PacketStats = {
 
 export interface InputTrackBacking {
 	getId(): number;
+	getNumber(): number;
 	getCodec(): MediaCodec | null;
 	getInternalCodecId(): string | number | Uint8Array | null;
 	getName(): string | null;
 	getLanguageCode(): string;
 	getTimeResolution(): number;
+	getDisposition(): TrackDisposition;
 	getFirstTimestamp(): Promise<number>;
 	computeDuration(): Promise<number>;
 
@@ -93,6 +96,15 @@ export abstract class InputTrack {
 	}
 
 	/**
+	 * The 1-based index of this track among all tracks of the same type in the input file. For example, the first
+	 * video track has number 1, the second video track has number 2, and so on. The index refers to the order in
+	 * which the tracks are returned by {@link Input.getTracks}.
+	 */
+	get number() {
+		return this._backing.getNumber();
+	}
+
+	/**
 	 * The identifier of the codec used internally by the container. It is not homogenized by Mediabunny
 	 * and depends entirely on the container format.
 	 *
@@ -102,6 +114,7 @@ export abstract class InputTrack {
 	 * - For Matroska files, this field returns the value of the `CodecID` element.
 	 * - For WAVE files, this field returns the value of the format tag in the `'fmt '` chunk.
 	 * - For ADTS files, this field contains the `MPEG-4 Audio Object Type`.
+	 * - For MPEG-TS files, this field contains the `streamType` value from the Program Map Table.
 	 * - In all other cases, this field is `null`.
 	 */
 	get internalCodecId() {
@@ -126,6 +139,11 @@ export abstract class InputTrack {
 	 */
 	get timeResolution() {
 		return this._backing.getTimeResolution();
+	}
+
+	/** The track's disposition, i.e. information about its intended usage. */
+	get disposition() {
+		return this._backing.getDisposition();
 	}
 
 	/**
@@ -190,6 +208,8 @@ export interface InputVideoTrackBacking extends InputTrackBacking {
 	getCodec(): VideoCodec | null;
 	getCodedWidth(): number;
 	getCodedHeight(): number;
+	getSquarePixelWidth(): number;
+	getSquarePixelHeight(): number;
 	getRotation(): Rotation;
 	getColorSpace(): Promise<VideoColorSpaceInit>;
 	canBeTransparent(): Promise<boolean>;
@@ -205,11 +225,21 @@ export class InputVideoTrack extends InputTrack {
 	/** @internal */
 	override _backing: InputVideoTrackBacking;
 
+	/**
+	 * The pixel aspect ratio of the track's frames, as a rational number in its reduced form. Most videos use
+	 * square pixels (1:1).
+	 */
+	readonly pixelAspectRatio: Rational;
+
 	/** @internal */
 	constructor(input: Input, backing: InputVideoTrackBacking) {
 		super(input, backing);
 
 		this._backing = backing;
+		this.pixelAspectRatio = simplifyRational({
+			num: this._backing.getSquarePixelWidth() * this._backing.getCodedHeight(),
+			den: this._backing.getSquarePixelHeight() * this._backing.getCodedWidth(),
+		});
 	}
 
 	get type(): TrackType {
@@ -235,16 +265,26 @@ export class InputVideoTrack extends InputTrack {
 		return this._backing.getRotation();
 	}
 
-	/** The width in pixels of the track's frames after rotation. */
-	get displayWidth() {
-		const rotation = this._backing.getRotation();
-		return rotation % 180 === 0 ? this._backing.getCodedWidth() : this._backing.getCodedHeight();
+	/** The width of the track's frames in square pixels, adjusted for pixel aspect ratio but before rotation. */
+	get squarePixelWidth() {
+		return this._backing.getSquarePixelWidth();
 	}
 
-	/** The height in pixels of the track's frames after rotation. */
+	/** The height of the track's frames in square pixels, adjusted for pixel aspect ratio but before rotation. */
+	get squarePixelHeight() {
+		return this._backing.getSquarePixelHeight();
+	}
+
+	/** The display width of the track's frames in pixels, after aspect ratio adjustment and rotation. */
+	get displayWidth() {
+		const rotation = this._backing.getRotation();
+		return rotation % 180 === 0 ? this.squarePixelWidth : this.squarePixelHeight;
+	}
+
+	/** The display height of the track's frames in pixels, after aspect ratio adjustment and rotation. */
 	get displayHeight() {
 		const rotation = this._backing.getRotation();
-		return rotation % 180 === 0 ? this._backing.getCodedHeight() : this._backing.getCodedWidth();
+		return rotation % 180 === 0 ? this.squarePixelHeight : this.squarePixelWidth;
 	}
 
 	/** Returns the color space of the track's samples. */

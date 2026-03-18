@@ -1,13 +1,20 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import type { FileHandle } from 'node:fs/promises';
 import { BufferTargetWriter, NullTargetWriter, StreamTargetWriter, Writer } from './writer';
 import { Output } from './output';
+import * as nodeAlias from './node';
+import { assert } from './misc';
+
+const node = typeof nodeAlias !== 'undefined'
+	? nodeAlias // Aliasing it prevents some bundler warnings
+	: undefined!;
 
 /**
  * Base class for targets, specifying where output files are written.
@@ -55,7 +62,7 @@ export type StreamTargetChunk = {
 	/** The operation type. */
 	type: 'write'; // This ensures automatic compatibility with FileSystemWritableFileStream
 	/** The data to write. */
-	data: Uint8Array;
+	data: Uint8Array<ArrayBuffer>;
 	/** The byte offset in the output file at which to write the data. */
 	position: number;
 };
@@ -118,6 +125,68 @@ export class StreamTarget extends Target {
 	/** @internal */
 	_createWriter() {
 		return new StreamTargetWriter(this);
+	}
+}
+
+/**
+ * Options for {@link FilePathTarget}.
+ * @group Output targets
+ * @public
+ */
+export type FilePathTargetOptions = StreamTargetOptions;
+
+/**
+ * A target that writes to a file at the specified path. Intended for server-side usage in Node, Bun, or Deno.
+ *
+ * Writing is chunked by default. The internally held file handle will be closed when `.finalize()` or `.cancel()` are
+ * called on the corresponding {@link Output}.
+ * @group Output targets
+ * @public
+ */
+export class FilePathTarget extends Target {
+	/** @internal */
+	_streamTarget: StreamTarget;
+	/** @internal */
+	_fileHandle: FileHandle | null = null;
+
+	/** Creates a new {@link FilePathTarget} that writes to the file at the specified file path. */
+	constructor(filePath: string, options: FilePathTargetOptions = {}) {
+		if (typeof filePath !== 'string') {
+			throw new TypeError('filePath must be a string.');
+		}
+		if (!options || typeof options !== 'object') {
+			throw new TypeError('options must be an object.');
+		}
+
+		super();
+
+		// Let's back this target with a StreamTarget, makes the implementation very simple
+		const writable = new WritableStream<StreamTargetChunk>({
+			start: async () => {
+				this._fileHandle = await node.fs.open(filePath, 'w');
+			},
+			write: async (chunk) => {
+				assert(this._fileHandle);
+				await this._fileHandle.write(chunk.data, 0, chunk.data.byteLength, chunk.position);
+			},
+			close: async () => {
+				if (this._fileHandle) {
+					await this._fileHandle.close();
+					this._fileHandle = null;
+				}
+			},
+		});
+
+		this._streamTarget = new StreamTarget(writable, {
+			chunked: true,
+			...options,
+		});
+		this._streamTarget._output = this._output;
+	}
+
+	/** @internal */
+	_createWriter(): Writer {
+		return this._streamTarget._createWriter();
 	}
 }
 

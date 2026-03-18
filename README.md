@@ -16,32 +16,59 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
 ### Gold sponsors
 
 <div align="center">
-  <a href="https://remotion.dev/" target="_blank">
-    <img src="./docs/public/sponsors/remotion.png" width="60" height="60" alt="Remotion">
+  <a href="https://remotion.dev/" target="_blank" rel="sponsored">
+    <picture>
+      <source srcset="./docs/public/sponsors/remotion-dark.png" media="(prefers-color-scheme: dark)">
+      <img src="./docs/public/sponsors/remotion-light.png" width="60" height="60" alt="Remotion">
+    </picture>
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://www.gling.ai/" target="_blank">
+  <a href="https://www.gling.ai/" target="_blank" rel="sponsored">
     <img src="./docs/public/sponsors/gling.svg" width="60" height="60" alt="Gling AI">
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://diffusion.studio/" target="_blank">
+  <a href="https://diffusion.studio/" target="_blank" rel="sponsored">
     <img src="./docs/public/sponsors/diffusionstudio.png" width="60" height="60" alt="Diffusion Studio">
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://kino.ai/" target="_blank">
+  <a href="https://kino.ai/" target="_blank" rel="sponsored">
     <img src="./docs/public/sponsors/kino.jpg" width="60" height="60" alt="Kino">
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://screen.studio/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/screen-studio.webp" width="60" height="60" alt="Screen Studio">
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.tella.com/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/tella.svg" width="60" height="60" alt="Tella">
+  </a>
+</div>
+
+### Silver sponsors
+
+<div align="center">
+  <a href="https://ponder.ai/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/ponder.png" width="50" height="50" alt="Ponder">
   </a>
 </div>
 
 ### Bronze sponsors
 
 <div align="center">
-  <a href="https://www.reactvideoeditor.com/" target="_blank">
-    <img src="./docs/public/sponsors/rve.svg" width="40" height="40" alt="React Video Editor">
+  <a href="https://elevenlabs.io/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/elevenlabs.png" width="40" height="40" alt="ElevenLabs">
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://www.mux.com/" target="_blank">
+  <a href="https://www.reactvideoeditor.com/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/rve.png" width="40" height="40" alt="React Video Editor">
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.mux.com/" target="_blank" rel="sponsored">
     <img src="./docs/public/sponsors/mux.jpg" width="40" height="40" alt="Mux">
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://jellypod.ai/" target="_blank" rel="sponsored">
+    <img src="./docs/public/sponsors/jellypod.png" width="40" height="40" alt="Jellypod">
   </a>
 </div>
 
@@ -51,7 +78,7 @@ Mediabunny is a JavaScript library for reading, writing, and converting media fi
 
 Core features include:
 
-- **Wide format support**: Read and write MP4, MOV, WebM, MKV, WAVE, MP3, Ogg, ADTS, FLAC
+- **Wide format support**: Read and write MP4, MOV, WebM, MKV, WAVE, MP3, Ogg, ADTS, FLAC, MPEG-TS
 - **Built-in encoding & decoding**: Supports 25+ video, audio, and subtitle codecs, hardware-accelerated using the WebCodecs API
 - **High precision**: Fine-grained, microsecond-accurate reading and writing operations
 - **Conversion API**: Easy-to-use API with features such as transmuxing, transcoding, resizing, rotation, cropping, resampling, trimming, and more
@@ -192,7 +219,7 @@ npm run lint # ESLint
 
 npm run docs:generate # Generates API docs
 npm run docs:dev # Start docs development server
-npm run dev # Start examples development server
-
+npm run dev # Start examples development server, will run at http://localhost:5173/examples/[name]/
+  
 npm run docs:build # Build docs and examples
 ```

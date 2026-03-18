@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -12,14 +12,14 @@ import { Demuxer } from '../demuxer';
 import { Input } from '../input';
 import { InputAudioTrack, InputAudioTrackBacking } from '../input-track';
 import { PacketRetrievalOptions } from '../media-sink';
-import { MetadataTags } from '../tags';
+import { DEFAULT_TRACK_DISPOSITION, MetadataTags } from '../metadata';
 import {
 	assert,
 	AsyncMutex,
 	binarySearchLessOrEqual,
 	findLast,
 	last,
-	roundToPrecision,
+	roundIfAlmostInteger,
 	toDataView,
 	UNDETERMINED_LANGUAGE,
 } from '../misc';
@@ -322,6 +322,10 @@ export class OggDemuxer extends Demuxer {
 		}
 
 		const totalPacketSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+		if (totalPacketSize === 0) {
+			return null; // Invalid packet, treat it as end of stream
+		}
+
 		const packetData = new Uint8Array(totalPacketSize);
 
 		let offset = 0;
@@ -424,6 +428,16 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		return this.bitstream.serialNumber;
 	}
 
+	getNumber() {
+		// All Ogg tracks are audio, so the track's index + 1 is its number
+		const index = this.demuxer.tracks.findIndex(
+			t => (t._backing as OggAudioTrackBacking).bitstream === this.bitstream,
+		);
+		assert(index !== -1);
+
+		return index + 1;
+	}
+
 	getNumberOfChannels() {
 		return this.bitstream.numberOfChannels;
 	}
@@ -461,6 +475,12 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 
 	getLanguageCode() {
 		return UNDETERMINED_LANGUAGE;
+	}
+
+	getDisposition() {
+		return {
+			...DEFAULT_TRACK_DISPOSITION,
+		};
 	}
 
 	async getFirstTimestamp() {
@@ -577,7 +597,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 			return this.getPacketSequential(timestamp, options);
 		}
 
-		const timestampInSamples = roundToPrecision(timestamp * this.internalSampleRate, 14);
+		const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
 		if (timestampInSamples === 0) {
 			// Fast path for timestamp 0 - avoids binary search when playing back from the start
 			return this.getFirstPacket(options);
@@ -910,7 +930,7 @@ class OggAudioTrackBacking implements InputAudioTrackBacking {
 		const release = await this.sequentialScanMutex.acquire(); // Requires exclusivity because we write to a cache
 
 		try {
-			const timestampInSamples = roundToPrecision(timestamp * this.internalSampleRate, 14);
+			const timestampInSamples = roundIfAlmostInteger(timestamp * this.internalSampleRate);
 			timestamp = timestampInSamples / this.internalSampleRate;
 
 			const index = binarySearchLessOrEqual(

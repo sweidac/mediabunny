@@ -1,11 +1,12 @@
 /*!
- * Copyright (c) 2025-present, Vanilagy and contributors
+ * Copyright (c) 2026-present, Vanilagy and contributors
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+import { parseAacAudioSpecificConfig } from '../shared/aac-misc';
 import {
 	Av1CodecInfo,
 	AvcDecoderConfigurationRecord,
@@ -13,7 +14,6 @@ import {
 	Vp9CodecInfo,
 } from './codec-data';
 import {
-	Bitstream,
 	COLOR_PRIMARIES_MAP,
 	MATRIX_COEFFICIENTS_MAP,
 	TRANSFER_CHARACTERISTICS_MAP,
@@ -70,6 +70,8 @@ export const NON_PCM_AUDIO_CODECS = [
 	'mp3',
 	'vorbis',
 	'flac',
+	'ac3',
+	'eac3',
 ] as const;
 /**
  * List of known audio codecs, ordered by encoding preference.
@@ -116,26 +118,26 @@ export type SubtitleCodec = typeof SUBTITLE_CODECS[number];
 export type MediaCodec = VideoCodec | AudioCodec | SubtitleCodec;
 
 // https://en.wikipedia.org/wiki/Advanced_Video_Coding
-const AVC_LEVEL_TABLE = [
-	{ maxMacroblocks: 99, maxBitrate: 64000, level: 0x0A }, // Level 1
-	{ maxMacroblocks: 396, maxBitrate: 192000, level: 0x0B }, // Level 1.1
-	{ maxMacroblocks: 396, maxBitrate: 384000, level: 0x0C }, // Level 1.2
-	{ maxMacroblocks: 396, maxBitrate: 768000, level: 0x0D }, // Level 1.3
-	{ maxMacroblocks: 396, maxBitrate: 2000000, level: 0x14 }, // Level 2
-	{ maxMacroblocks: 792, maxBitrate: 4000000, level: 0x15 }, // Level 2.1
-	{ maxMacroblocks: 1620, maxBitrate: 4000000, level: 0x16 }, // Level 2.2
-	{ maxMacroblocks: 1620, maxBitrate: 10000000, level: 0x1E }, // Level 3
-	{ maxMacroblocks: 3600, maxBitrate: 14000000, level: 0x1F }, // Level 3.1
-	{ maxMacroblocks: 5120, maxBitrate: 20000000, level: 0x20 }, // Level 3.2
-	{ maxMacroblocks: 8192, maxBitrate: 20000000, level: 0x28 }, // Level 4
-	{ maxMacroblocks: 8192, maxBitrate: 50000000, level: 0x29 }, // Level 4.1
-	{ maxMacroblocks: 8704, maxBitrate: 50000000, level: 0x2A }, // Level 4.2
-	{ maxMacroblocks: 22080, maxBitrate: 135000000, level: 0x32 }, // Level 5
-	{ maxMacroblocks: 36864, maxBitrate: 240000000, level: 0x33 }, // Level 5.1
-	{ maxMacroblocks: 36864, maxBitrate: 240000000, level: 0x34 }, // Level 5.2
-	{ maxMacroblocks: 139264, maxBitrate: 240000000, level: 0x3C }, // Level 6
-	{ maxMacroblocks: 139264, maxBitrate: 480000000, level: 0x3D }, // Level 6.1
-	{ maxMacroblocks: 139264, maxBitrate: 800000000, level: 0x3E }, // Level 6.2
+export const AVC_LEVEL_TABLE = [
+	{ maxMacroblocks: 99, maxBitrate: 64000, maxDpbMbs: 396, level: 0x0A }, // Level 1
+	{ maxMacroblocks: 396, maxBitrate: 192000, maxDpbMbs: 900, level: 0x0B }, // Level 1.1
+	{ maxMacroblocks: 396, maxBitrate: 384000, maxDpbMbs: 2376, level: 0x0C }, // Level 1.2
+	{ maxMacroblocks: 396, maxBitrate: 768000, maxDpbMbs: 2376, level: 0x0D }, // Level 1.3
+	{ maxMacroblocks: 396, maxBitrate: 2000000, maxDpbMbs: 2376, level: 0x14 }, // Level 2
+	{ maxMacroblocks: 792, maxBitrate: 4000000, maxDpbMbs: 4752, level: 0x15 }, // Level 2.1
+	{ maxMacroblocks: 1620, maxBitrate: 4000000, maxDpbMbs: 8100, level: 0x16 }, // Level 2.2
+	{ maxMacroblocks: 1620, maxBitrate: 10000000, maxDpbMbs: 8100, level: 0x1E }, // Level 3
+	{ maxMacroblocks: 3600, maxBitrate: 14000000, maxDpbMbs: 18000, level: 0x1F }, // Level 3.1
+	{ maxMacroblocks: 5120, maxBitrate: 20000000, maxDpbMbs: 20480, level: 0x20 }, // Level 3.2
+	{ maxMacroblocks: 8192, maxBitrate: 20000000, maxDpbMbs: 32768, level: 0x28 }, // Level 4
+	{ maxMacroblocks: 8192, maxBitrate: 50000000, maxDpbMbs: 32768, level: 0x29 }, // Level 4.1
+	{ maxMacroblocks: 8704, maxBitrate: 50000000, maxDpbMbs: 34816, level: 0x2A }, // Level 4.2
+	{ maxMacroblocks: 22080, maxBitrate: 135000000, maxDpbMbs: 110400, level: 0x32 }, // Level 5
+	{ maxMacroblocks: 36864, maxBitrate: 240000000, maxDpbMbs: 184320, level: 0x33 }, // Level 5.1
+	{ maxMacroblocks: 36864, maxBitrate: 240000000, maxDpbMbs: 184320, level: 0x34 }, // Level 5.2
+	{ maxMacroblocks: 139264, maxBitrate: 240000000, maxDpbMbs: 696320, level: 0x3C }, // Level 6
+	{ maxMacroblocks: 139264, maxBitrate: 480000000, maxDpbMbs: 696320, level: 0x3D }, // Level 6.1
+	{ maxMacroblocks: 139264, maxBitrate: 800000000, maxDpbMbs: 696320, level: 0x3E }, // Level 6.2
 ];
 
 // https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding
@@ -337,6 +339,7 @@ export const extractVideoCodecString = (trackInfo: {
 	codec: VideoCodec | null;
 	codecDescription: Uint8Array | null;
 	colorSpace: VideoColorSpaceInit | null;
+	avcType: 1 | 3 | null;
 	avcCodecInfo: AvcDecoderConfigurationRecord | null;
 	hevcCodecInfo: HevcDecoderConfigurationRecord | null;
 	vp9CodecInfo: Vp9CodecInfo | null;
@@ -345,6 +348,8 @@ export const extractVideoCodecString = (trackInfo: {
 	const { codec, codecDescription, colorSpace, avcCodecInfo, hevcCodecInfo, vp9CodecInfo, av1CodecInfo } = trackInfo;
 
 	if (codec === 'avc') {
+		assert(trackInfo.avcType !== null);
+
 		if (avcCodecInfo) {
 			const bytes = new Uint8Array([
 				avcCodecInfo.avcProfileIndication,
@@ -352,14 +357,14 @@ export const extractVideoCodecString = (trackInfo: {
 				avcCodecInfo.avcLevelIndication,
 			]);
 
-			return `avc1.${bytesToHexString(bytes)}`;
+			return `avc${trackInfo.avcType}.${bytesToHexString(bytes)}`;
 		}
 
 		if (!codecDescription || codecDescription.byteLength < 4) {
 			throw new TypeError('AVC decoder description is not provided or is not at least 4 bytes long.');
 		}
 
-		return `avc1.${bytesToHexString(codecDescription.subarray(1, 4))}`;
+		return `avc${trackInfo.avcType}.${bytesToHexString(codecDescription.subarray(1, 4))}`;
 	} else if (codec === 'hevc') {
 		let generalProfileSpace: number;
 		let generalProfileIdc: number;
@@ -525,6 +530,10 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 		return 'vorbis';
 	} else if (codec === 'flac') {
 		return 'flac';
+	} else if (codec === 'ac3') {
+		return 'ac-3';
+	} else if (codec === 'eac3') {
+		return 'ec-3';
 	} else if ((PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
@@ -534,6 +543,7 @@ export const buildAudioCodecString = (codec: AudioCodec, numberOfChannels: numbe
 
 export type AacCodecInfo = {
 	isMpeg2: boolean;
+	objectType: number | null;
 };
 
 export const extractAudioCodecString = (trackInfo: {
@@ -551,8 +561,15 @@ export const extractAudioCodecString = (trackInfo: {
 		if (aacCodecInfo.isMpeg2) {
 			return 'mp4a.67';
 		} else {
-			const audioSpecificConfig = parseAacAudioSpecificConfig(codecDescription);
-			return `mp4a.40.${audioSpecificConfig.objectType}`;
+			let objectType: number;
+			if (aacCodecInfo.objectType !== null) {
+				objectType = aacCodecInfo.objectType;
+			} else {
+				const audioSpecificConfig = parseAacAudioSpecificConfig(codecDescription);
+				objectType = audioSpecificConfig.objectType;
+			}
+
+			return `mp4a.40.${objectType}`;
 		}
 	} else if (codec === 'mp3') {
 		return 'mp3';
@@ -562,63 +579,15 @@ export const extractAudioCodecString = (trackInfo: {
 		return 'vorbis';
 	} else if (codec === 'flac') {
 		return 'flac';
+	} else if (codec === 'ac3') {
+		return 'ac-3';
+	} else if (codec === 'eac3') {
+		return 'ec-3';
 	} else if (codec && (PCM_AUDIO_CODECS as readonly string[]).includes(codec)) {
 		return codec;
 	}
 
 	throw new TypeError(`Unhandled codec '${codec}'.`);
-};
-
-export type AacAudioSpecificConfig = {
-	objectType: number;
-	frequencyIndex: number;
-	sampleRate: number | null;
-	channelConfiguration: number;
-	numberOfChannels: number | null;
-};
-
-export const aacFrequencyTable = [
-	96000, 88200, 64000, 48000, 44100, 32000,
-	24000, 22050, 16000, 12000, 11025, 8000, 7350,
-];
-
-export const aacChannelMap = [-1, 1, 2, 3, 4, 5, 6, 8];
-
-export const parseAacAudioSpecificConfig = (bytes: Uint8Array | null): AacAudioSpecificConfig => {
-	if (!bytes || bytes.byteLength < 2) {
-		throw new TypeError('AAC description must be at least 2 bytes long.');
-	}
-
-	const bitstream = new Bitstream(bytes);
-
-	let objectType = bitstream.readBits(5);
-	if (objectType === 31) {
-		objectType = 32 + bitstream.readBits(6);
-	}
-
-	const frequencyIndex = bitstream.readBits(4);
-	let sampleRate: number | null = null;
-	if (frequencyIndex === 15) {
-		sampleRate = bitstream.readBits(24);
-	} else {
-		if (frequencyIndex < aacFrequencyTable.length) {
-			sampleRate = aacFrequencyTable[frequencyIndex]!;
-		}
-	}
-
-	const channelConfiguration = bitstream.readBits(4);
-	let numberOfChannels: number | null = null;
-	if (channelConfiguration >= 1 && channelConfiguration <= 7) {
-		numberOfChannels = aacChannelMap[channelConfiguration]!;
-	}
-
-	return {
-		objectType,
-		frequencyIndex,
-		sampleRate,
-		channelConfiguration,
-		numberOfChannels,
-	};
 };
 
 export const OPUS_SAMPLE_RATE = 48_000;
@@ -683,6 +652,10 @@ export const inferCodecFromCodecString = (codecString: string): MediaCodec | nul
 		return 'vorbis';
 	} else if (codecString === 'flac') {
 		return 'flac';
+	} else if (codecString === 'ac-3' || codecString === 'ac3') {
+		return 'ac3';
+	} else if (codecString === 'ec-3' || codecString === 'eac3') {
+		return 'eac3';
 	} else if (codecString === 'ulaw') {
 		return 'ulaw';
 	} else if (codecString === 'alaw') {
@@ -760,7 +733,7 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 	if (!VALID_VIDEO_CODEC_STRING_PREFIXES.some(prefix => metadata.decoderConfig!.codec.startsWith(prefix))) {
 		throw new TypeError(
 			'Video chunk metadata decoder configuration codec string must be a valid video codec string as specified in'
-			+ ' the WebCodecs Codec Registry.',
+			+ ' the Mediabunny Codec Registry.',
 		);
 	}
 	if (!Number.isInteger(metadata.decoderConfig.codedWidth) || metadata.decoderConfig.codedWidth! <= 0) {
@@ -874,7 +847,9 @@ export const validateVideoChunkMetadata = (metadata: EncodedVideoChunkMetadata |
 	}
 };
 
-const VALID_AUDIO_CODEC_STRING_PREFIXES = ['mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm'];
+const VALID_AUDIO_CODEC_STRING_PREFIXES = [
+	'mp4a', 'mp3', 'opus', 'vorbis', 'flac', 'ulaw', 'alaw', 'pcm', 'ac-3', 'ec-3',
+];
 
 export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata | undefined) => {
 	if (!metadata) {
@@ -895,7 +870,7 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 	if (!VALID_AUDIO_CODEC_STRING_PREFIXES.some(prefix => metadata.decoderConfig!.codec.startsWith(prefix))) {
 		throw new TypeError(
 			'Audio chunk metadata decoder configuration codec string must be a valid audio codec string as specified in'
-			+ ' the WebCodecs Codec Registry.',
+			+ ' the Mediabunny Codec Registry.',
 		);
 	}
 	if (!Number.isInteger(metadata.decoderConfig.sampleRate) || metadata.decoderConfig.sampleRate <= 0) {
@@ -934,12 +909,9 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 			);
 		}
 
-		if (!metadata.decoderConfig.description) {
-			throw new TypeError(
-				'Audio chunk metadata decoder configuration for AAC must include a description, which is expected to be'
-				+ ' an AudioSpecificConfig as specified in ISO 14496-3.',
-			);
-		}
+		// `description` may or may not be set, depending on if the format is AAC or ADTS, so don't perform any
+		// validation for it.
+		// https://www.w3.org/TR/webcodecs-aac-codec-registration
 	} else if (metadata.decoderConfig.codec.startsWith('mp3') || metadata.decoderConfig.codec.startsWith('mp4a')) {
 		// MP3-specific validation
 
@@ -994,6 +966,18 @@ export const validateAudioChunkMetadata = (metadata: EncodedAudioChunkMetadata |
 				'Audio chunk metadata decoder configuration for FLAC must include a description, which is expected to'
 				+ ' adhere to the format described in https://www.w3.org/TR/webcodecs-flac-codec-registration/.',
 			);
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('ac-3') || metadata.decoderConfig.codec.startsWith('ac3')) {
+		// AC3-specific validation
+
+		if (metadata.decoderConfig.codec !== 'ac-3') {
+			throw new TypeError('Audio chunk metadata decoder configuration codec string for AC-3 must be "ac-3".');
+		}
+	} else if (metadata.decoderConfig.codec.startsWith('ec-3') || metadata.decoderConfig.codec.startsWith('eac3')) {
+		// EAC3-specific validation
+
+		if (metadata.decoderConfig.codec !== 'ec-3') {
+			throw new TypeError('Audio chunk metadata decoder configuration codec string for EC-3 must be "ec-3".');
 		}
 	} else if (
 		metadata.decoderConfig.codec.startsWith('pcm')

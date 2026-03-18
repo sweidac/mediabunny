@@ -62,20 +62,22 @@ const compressFile = async (resource: File | string) => {
 		currentConversion = await Conversion.init({
 			input,
 			output,
-			video: {
+			video: track => ({
 				width: 320, // Height will be deduced automatically to retain aspect ratio
 				bitrate: QUALITY_VERY_LOW,
-			},
-			audio: {
+				discard: track.number > 1, // Keep only the first video track
+			}),
+			audio: track => ({
 				bitrate: 32e3,
-			},
+				discard: track.number > 1, // Keep only the first audio track
+			}),
 		});
 
 		// Keep track of progress
 		let progress = 0;
 		currentConversion.onProgress = newProgress => progress = newProgress;
 
-		const fileDuration = await input.computeDuration();
+		const fileDuration = (await input.computeDuration()) - (await input.getFirstTimestamp());
 		const startTime = performance.now();
 
 		const updateProgress = () => {
@@ -124,7 +126,7 @@ const compressFile = async (resource: File | string) => {
 selectMediaButton.addEventListener('click', () => {
 	const fileInput = document.createElement('input');
 	fileInput.type = 'file';
-	fileInput.accept = 'video/*,video/x-matroska,audio/*,audio/aac';
+	fileInput.accept = 'video/*,video/x-matroska,video/mp2t,.ts,audio/*,audio/aac';
 	fileInput.addEventListener('change', () => {
 		const file = fileInput.files?.[0];
 		if (!file) {
@@ -141,7 +143,7 @@ loadUrlButton.addEventListener('click', () => {
 	const url = prompt(
 		'Please enter a URL of a media file. Note that it must be HTTPS and support cross-origin requests, so have the'
 		+ ' right CORS headers set.',
-		'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+		'https://remotion.media/BigBuckBunny.mp4',
 	);
 	if (!url) {
 		return;
